@@ -11,9 +11,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.Set;
-import java.util.UUID;
 
 @Service
 public class FileStorageService {
@@ -26,77 +24,111 @@ public class FileStorageService {
     );
     private static final long MAX_IMAGE_SIZE = 5L * 1024 * 1024;
 
+    private static final String FOOD_CLOUDINARY_FOLDER = "lumora/foods";
+    private static final String AVATAR_CLOUDINARY_FOLDER = "lumora/avatars";
+    private static final String LEGACY_FOOD_PREFIX = "/uploads/foods/";
+    private static final String LEGACY_AVATAR_PREFIX = "/uploads/avatars/";
+
+    private final CloudinaryImageService cloudinaryImageService;
     private final Path foodUploadDir;
     private final Path avatarUploadDir;
 
     public FileStorageService(
+            CloudinaryImageService cloudinaryImageService,
             @Value("${app.upload.food-dir:uploads/foods}") String foodUploadDir,
             @Value("${app.upload.avatar-dir:uploads/avatars}") String avatarUploadDir) {
+        this.cloudinaryImageService = cloudinaryImageService;
         this.foodUploadDir = Paths.get(foodUploadDir).toAbsolutePath().normalize();
         this.avatarUploadDir = Paths.get(avatarUploadDir).toAbsolutePath().normalize();
     }
 
     public String saveFoodImage(MultipartFile file) {
-        return saveImage(file, foodUploadDir, "/uploads/foods/", "món ăn");
+        return saveCloudinaryImage(file, FOOD_CLOUDINARY_FOLDER, "food", "món ăn");
     }
 
     public String saveAvatarImage(MultipartFile file) {
-        return saveImage(file, avatarUploadDir, "/uploads/avatars/", "đại diện");
+        return saveCloudinaryImage(file, AVATAR_CLOUDINARY_FOLDER, "avatar", "đại diện");
+    }
+
+    public void deleteFoodImage(String imageUrl) {
+        deleteImage(imageUrl, foodUploadDir, LEGACY_FOOD_PREFIX);
     }
 
     public void deleteAvatarImage(String imageUrl) {
-        if (imageUrl == null || imageUrl.isBlank() || !imageUrl.startsWith("/uploads/avatars/")) {
+        deleteImage(imageUrl, avatarUploadDir, LEGACY_AVATAR_PREFIX);
+    }
+
+    private String saveCloudinaryImage(MultipartFile file,
+                                       String cloudinaryFolder,
+                                       String publicIdPrefix,
+                                       String imageLabel) {
+        validateImage(file, imageLabel);
+
+        String originalName = StringUtils.cleanPath(
+                file.getOriginalFilename() == null ? "" : file.getOriginalFilename()
+        );
+        String extension = getExtension(originalName);
+        if (!ALLOWED_EXTENSIONS.contains(extension)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Chỉ cho phép ảnh jpg, jpeg, png, webp hoặc gif"
+            );
+        }
+
+        try {
+            return cloudinaryImageService.upload(file.getBytes(), cloudinaryFolder, publicIdPrefix);
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (IOException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Không thể đọc ảnh " + imageLabel,
+                    ex
+            );
+        }
+    }
+
+    /**
+     * Xóa ảnh mới trên Cloudinary; vẫn hỗ trợ dọn các đường dẫn local cũ trong
+     * thời gian chuyển dữ liệu để không làm ảnh hưởng dữ liệu đã tồn tại.
+     */
+    private void deleteImage(String imageUrl, Path legacyUploadDir, String legacyPublicPrefix) {
+        if (imageUrl == null || imageUrl.isBlank()) {
             return;
         }
 
-        String fileName = imageUrl.substring("/uploads/avatars/".length());
+        if (cloudinaryImageService.isCloudinaryUrl(imageUrl)) {
+            cloudinaryImageService.deleteByUrl(imageUrl);
+            return;
+        }
+
+        if (!imageUrl.startsWith(legacyPublicPrefix)) {
+            return;
+        }
+
+        String fileName = imageUrl.substring(legacyPublicPrefix.length());
         if (fileName.isBlank() || fileName.contains("/") || fileName.contains("\\")) {
             return;
         }
 
-        Path target = avatarUploadDir.resolve(fileName).normalize();
-        if (!target.startsWith(avatarUploadDir)) {
+        Path target = legacyUploadDir.resolve(fileName).normalize();
+        if (!target.startsWith(legacyUploadDir)) {
             return;
         }
 
         try {
             Files.deleteIfExists(target);
         } catch (IOException ignored) {
-            // Không làm hỏng thao tác cập nhật hồ sơ nếu việc dọn ảnh cũ thất bại.
-        }
-    }
-
-    private String saveImage(MultipartFile file,
-                             Path uploadDir,
-                             String publicPrefix,
-                             String imageLabel) {
-        validateImage(file, imageLabel);
-
-        String originalName = StringUtils.cleanPath(file.getOriginalFilename() == null ? "" : file.getOriginalFilename());
-        String extension = getExtension(originalName);
-        if (!ALLOWED_EXTENSIONS.contains(extension)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Chỉ cho phép ảnh jpg, jpeg, png, webp hoặc gif");
-        }
-
-        try {
-            Files.createDirectories(uploadDir);
-            String fileName = UUID.randomUUID() + "." + extension;
-            Path target = uploadDir.resolve(fileName).normalize();
-            if (!target.startsWith(uploadDir)) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tên file ảnh không hợp lệ");
-            }
-            Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
-            return publicPrefix + fileName;
-        } catch (ResponseStatusException ex) {
-            throw ex;
-        } catch (IOException e) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Không thể lưu ảnh " + imageLabel);
+            // Không làm hỏng nghiệp vụ nếu việc dọn ảnh cũ thất bại.
         }
     }
 
     private void validateImage(MultipartFile file, String imageLabel) {
         if (file == null || file.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File ảnh " + imageLabel + " không được bỏ trống");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "File ảnh " + imageLabel + " không được bỏ trống"
+            );
         }
         if (file.getSize() > MAX_IMAGE_SIZE) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ảnh không được vượt quá 5 MB");
@@ -104,7 +136,10 @@ public class FileStorageService {
 
         String contentType = file.getContentType();
         if (contentType == null || !ALLOWED_IMAGE_CONTENT_TYPES.contains(contentType.toLowerCase())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File tải lên không phải định dạng ảnh được hỗ trợ");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "File tải lên không phải định dạng ảnh được hỗ trợ"
+            );
         }
     }
 

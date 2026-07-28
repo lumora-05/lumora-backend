@@ -107,7 +107,8 @@ public class DataInitializer {
                             table.setMaQr(formatQrCode(table.getMaBan()));
                             changed = true;
                         }
-                        if (legacyQr || qrTokenCreated) {
+                        boolean legacyStorage = !qrCodeService.isCloudinaryImage(table.getAnhQr());
+                        if (legacyQr || qrTokenCreated || legacyStorage) {
                             table.setAnhQr(qrCodeService.generateTableQr(table));
                             changed = true;
                         }

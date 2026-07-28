@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,16 +19,23 @@ import java.nio.file.Paths;
 
 @Service
 public class QrCodeService {
+    private static final String QR_CLOUDINARY_FOLDER = "lumora/qrcodes";
+    private static final String LEGACY_QR_PREFIX = "/uploads/qrcodes/";
+
     private final String frontendBaseUrl;
     private final Path qrUploadDir;
     private final int qrSize;
+    private final CloudinaryImageService cloudinaryImageService;
 
-    public QrCodeService(@Value("${app.frontend.base-url:http://localhost:5173}") String frontendBaseUrl,
-                         @Value("${app.upload.qr-dir:uploads/qrcodes}") String qrUploadDir,
-                         @Value("${app.qr.size:300}") int qrSize) {
+    public QrCodeService(
+            @Value("${app.frontend.base-url:http://localhost:5173}") String frontendBaseUrl,
+            @Value("${app.upload.qr-dir:uploads/qrcodes}") String qrUploadDir,
+            @Value("${app.qr.size:300}") int qrSize,
+            CloudinaryImageService cloudinaryImageService) {
         this.frontendBaseUrl = frontendBaseUrl;
         this.qrUploadDir = Paths.get(qrUploadDir).toAbsolutePath().normalize();
         this.qrSize = qrSize;
+        this.cloudinaryImageService = cloudinaryImageService;
     }
 
     /**
@@ -46,22 +54,28 @@ public class QrCodeService {
 
     public String generateTableQr(DiningTable table) {
         String content = buildQrContent(table);
-        String fileName = "table-" + table.getMaBan() + "-" + System.currentTimeMillis() + ".png";
-        Path target = qrUploadDir.resolve(fileName).normalize();
+        String oldImageUrl = table.getAnhQr();
 
-        if (!target.startsWith(qrUploadDir)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Đường dẫn tạo QR không hợp lệ");
-        }
-
-        try {
-            Files.createDirectories(qrUploadDir);
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             QRCodeWriter qrCodeWriter = new QRCodeWriter();
             BitMatrix bitMatrix = qrCodeWriter.encode(content, BarcodeFormat.QR_CODE, qrSize, qrSize);
-            MatrixToImageWriter.writeToPath(bitMatrix, "PNG", target);
-            deleteOldImage(table.getAnhQr(), target);
-            return "/uploads/qrcodes/" + fileName;
-        } catch (WriterException | IOException e) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Không thể tạo ảnh QR cho bàn ăn");
+            MatrixToImageWriter.writeToStream(bitMatrix, "PNG", outputStream);
+
+            String newImageUrl = cloudinaryImageService.upload(
+                    outputStream.toByteArray(),
+                    QR_CLOUDINARY_FOLDER,
+                    "table-" + table.getMaBan(),
+                    "png"
+            );
+
+            deleteOldImage(oldImageUrl, newImageUrl);
+            return newImageUrl;
+        } catch (WriterException | IOException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Không thể tạo ảnh QR cho bàn ăn",
+                    ex
+            );
         }
     }
 
@@ -71,18 +85,32 @@ public class QrCodeService {
         }
     }
 
-    private void deleteOldImage(String publicPath, Path keepPath) {
-        if (publicPath == null || publicPath.isBlank()) {
+    public boolean isCloudinaryImage(String imageUrl) {
+        return cloudinaryImageService.isCloudinaryUrl(imageUrl);
+    }
+
+    private void deleteOldImage(String imageUrl, String keepImageUrl) {
+        if (imageUrl == null || imageUrl.isBlank() || imageUrl.equals(keepImageUrl)) {
             return;
         }
 
-        String fileName = publicPath.substring(publicPath.lastIndexOf('/') + 1).split("\\?", 2)[0];
-        if (fileName.isBlank()) {
+        if (cloudinaryImageService.isCloudinaryUrl(imageUrl)) {
+            cloudinaryImageService.deleteByUrl(imageUrl);
+            return;
+        }
+
+        // Hỗ trợ dọn ảnh QR local cũ trong thời gian chuyển sang Cloudinary.
+        if (!imageUrl.startsWith(LEGACY_QR_PREFIX)) {
+            return;
+        }
+
+        String fileName = imageUrl.substring(LEGACY_QR_PREFIX.length()).split("\\?", 2)[0];
+        if (fileName.isBlank() || fileName.contains("/") || fileName.contains("\\")) {
             return;
         }
 
         Path oldFile = qrUploadDir.resolve(fileName).normalize();
-        if (!oldFile.startsWith(qrUploadDir) || (keepPath != null && oldFile.equals(keepPath))) {
+        if (!oldFile.startsWith(qrUploadDir)) {
             return;
         }
 

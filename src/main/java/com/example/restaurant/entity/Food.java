@@ -32,7 +32,7 @@ public class Food {
     @Column(name = "mo_ta", length = 255)
     private String moTa;
 
-    @Column(name = "hinh_anh", length = 255)
+    @Column(name = "hinh_anh", length = 500)
     private String hinhAnh;
 
     @Column(name = "trang_thai", nullable = false)

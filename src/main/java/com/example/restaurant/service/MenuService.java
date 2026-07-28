@@ -13,10 +13,13 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Service
 public class MenuService {
@@ -25,17 +28,20 @@ public class MenuService {
     private final OrderItemRepository orderItemRepository;
     private final SystemActivityService systemActivityService;
     private final RealtimeNotificationService realtimeNotificationService;
+    private final FileStorageService fileStorageService;
 
     public MenuService(FoodRepository foodRepository,
                        CategoryRepository categoryRepository,
                        OrderItemRepository orderItemRepository,
                        SystemActivityService systemActivityService,
-                       RealtimeNotificationService realtimeNotificationService) {
+                       RealtimeNotificationService realtimeNotificationService,
+                       FileStorageService fileStorageService) {
         this.foodRepository = foodRepository;
         this.categoryRepository = categoryRepository;
         this.orderItemRepository = orderItemRepository;
         this.systemActivityService = systemActivityService;
         this.realtimeNotificationService = realtimeNotificationService;
+        this.fileStorageService = fileStorageService;
     }
 
     public List<Food> findActiveFoods() {
@@ -117,8 +123,10 @@ public class MenuService {
     @Transactional
     public Food update(Integer id, FoodRequest request) {
         Food food = findById(id);
+        String oldImageUrl = food.getHinhAnh();
         apply(food, request);
         Food savedFood = foodRepository.save(food);
+        deleteFoodImageAfterCommitIfChanged(oldImageUrl, savedFood.getHinhAnh());
         systemActivityService.record(
                 "FOOD_UPDATED",
                 "Món ăn " + savedFood.getTenMonAn() + " đã được cập nhật",
@@ -165,8 +173,10 @@ public class MenuService {
         }
 
         String foodName = food.getTenMonAn();
+        String imageUrl = food.getHinhAnh();
         foodRepository.delete(food);
         foodRepository.flush();
+        deleteFoodImageAfterCommit(imageUrl);
 
         systemActivityService.record(
                 "FOOD_DELETED",
@@ -180,6 +190,29 @@ public class MenuService {
         );
         realtimeNotificationService.notifyMenuAvailabilityChanged(payload);
         realtimeNotificationService.notifyDashboardRefresh(payload);
+    }
+
+    private void deleteFoodImageAfterCommitIfChanged(String oldImageUrl, String newImageUrl) {
+        if (Objects.equals(oldImageUrl, newImageUrl)) {
+            return;
+        }
+        deleteFoodImageAfterCommit(oldImageUrl);
+    }
+
+    private void deleteFoodImageAfterCommit(String imageUrl) {
+        if (imageUrl == null || imageUrl.isBlank()) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            fileStorageService.deleteFoodImage(imageUrl);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                fileStorageService.deleteFoodImage(imageUrl);
+            }
+        });
     }
 
     private int normalizePage(int page) {

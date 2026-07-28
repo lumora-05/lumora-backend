@@ -36,7 +36,7 @@ public class DiningTable {
     @Column(name = "qr_token", length = 64, unique = true)
     private String qrToken;
 
-    /** Đường dẫn ảnh QR được public qua /uploads/qrcodes/**. */
+    /** URL HTTPS của ảnh QR được lưu trên Cloudinary. */
     @Column(name = "anh_qr", length = 500)
     private String anhQr;
 
