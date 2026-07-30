@@ -23,6 +23,7 @@ public record IngredientBatchResponse(
         BigDecimal giaTriChoTieuHuy,
         String nhaCungCap,
         Boolean trangThai,
+        String trangThaiAnToan,
         String trangThaiHanSuDung,
         Long soNgayConLai,
         boolean choPhepXuat,

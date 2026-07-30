@@ -5,6 +5,7 @@ import com.example.restaurant.entity.Category;
 import com.example.restaurant.entity.Food;
 import com.example.restaurant.repository.CategoryRepository;
 import com.example.restaurant.repository.FoodRepository;
+import com.example.restaurant.repository.FoodRecipeIngredientRepository;
 import com.example.restaurant.repository.OrderItemRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -24,6 +25,7 @@ import java.util.Objects;
 @Service
 public class MenuService {
     private final FoodRepository foodRepository;
+    private final FoodRecipeIngredientRepository recipeRepository;
     private final CategoryRepository categoryRepository;
     private final OrderItemRepository orderItemRepository;
     private final SystemActivityService systemActivityService;
@@ -31,12 +33,14 @@ public class MenuService {
     private final FileStorageService fileStorageService;
 
     public MenuService(FoodRepository foodRepository,
+                       FoodRecipeIngredientRepository recipeRepository,
                        CategoryRepository categoryRepository,
                        OrderItemRepository orderItemRepository,
                        SystemActivityService systemActivityService,
                        RealtimeNotificationService realtimeNotificationService,
                        FileStorageService fileStorageService) {
         this.foodRepository = foodRepository;
+        this.recipeRepository = recipeRepository;
         this.categoryRepository = categoryRepository;
         this.orderItemRepository = orderItemRepository;
         this.systemActivityService = systemActivityService;
@@ -174,6 +178,8 @@ public class MenuService {
 
         String foodName = food.getTenMonAn();
         String imageUrl = food.getHinhAnh();
+        recipeRepository.deleteByMonAn_MaMonAn(id);
+        recipeRepository.flush();
         foodRepository.delete(food);
         foodRepository.flush();
         deleteFoodImageAfterCommit(imageUrl);

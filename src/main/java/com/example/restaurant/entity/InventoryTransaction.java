@@ -19,7 +19,8 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_giao_dich_kho_lo", columnList = "ma_lo"),
                 @Index(name = "idx_giao_dich_kho_loai", columnList = "loai_giao_dich"),
                 @Index(name = "idx_giao_dich_kho_ma_ly_do", columnList = "ma_ly_do"),
-                @Index(name = "idx_giao_dich_kho_thoi_gian", columnList = "thoi_gian")
+                @Index(name = "idx_giao_dich_kho_thoi_gian", columnList = "thoi_gian"),
+                @Index(name = "idx_giao_dich_kho_chi_tiet", columnList = "ma_chi_tiet")
         }
 )
 public class InventoryTransaction {
@@ -35,6 +36,10 @@ public class InventoryTransaction {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "ma_lo")
     private IngredientBatch loNguyenLieu;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "ma_chi_tiet")
+    private OrderItem chiTietDonHang;
 
     @Column(name = "loai_giao_dich", length = 30, nullable = false)
     private String loaiGiaoDich;

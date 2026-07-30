@@ -56,6 +56,8 @@ public class InventoryService {
     public static final String USED_UP = "DA_DUNG_HET";
     public static final String NOT_TRACKED = "KHONG_THEO_DOI";
 
+    public static final String SAFETY_SAFE = "AN_TOAN";
+
     private static final int DEFAULT_EXPIRY_WARNING_DAYS = 3;
     private static final String WASTE_OTHER = "KHAC";
     private static final String WASTE_EXPIRED = "QUA_HAN_SU_DUNG";
@@ -769,6 +771,10 @@ public class InventoryService {
         if (!Boolean.TRUE.equals(batch.getTrangThai())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Lô nguyên liệu đã ngừng sử dụng");
         }
+        if (!isBatchSafe(batch)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Lô nguyên liệu đang bị khóa do vấn đề an toàn thực phẩm");
+        }
         if (isExpired(batch)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Không thể nhập thêm vào lô đã hết hạn");
@@ -864,6 +870,10 @@ public class InventoryService {
         validateBatchBelongsToIngredient(batch, ingredient);
         if (!Boolean.TRUE.equals(batch.getTrangThai())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Lô nguyên liệu đã ngừng sử dụng");
+        }
+        if (!isBatchSafe(batch)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Lô " + batch.getSoLo() + " đang bị khóa do vấn đề an toàn thực phẩm");
         }
         if (isExpired(batch)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -1128,7 +1138,8 @@ public class InventoryService {
         boolean expired = EXPIRED.equals(expiryStatus);
         boolean usable = Boolean.TRUE.equals(batch.getTrangThai())
                 && remaining.compareTo(BigDecimal.ZERO) > 0
-                && !expired;
+                && !expired
+                && isBatchSafe(batch);
         BigDecimal usableQuantity = usable ? remaining : BigDecimal.ZERO;
         BigDecimal pendingQuantity = expired ? remaining : BigDecimal.ZERO;
         Long daysRemaining = batch.getHanSuDung() == null
@@ -1153,6 +1164,7 @@ public class InventoryService {
                 pendingQuantity.multiply(price),
                 batch.getNhaCungCap(),
                 batch.getTrangThai(),
+                safetyStatus(batch),
                 expiryStatus,
                 daysRemaining,
                 usable,
@@ -1232,7 +1244,7 @@ public class InventoryService {
                 pendingDisposal = pendingDisposal.add(remaining);
                 pendingDisposalValue = pendingDisposalValue.add(remaining.multiply(price));
                 expiredBatchCount++;
-            } else if (Boolean.TRUE.equals(batch.getTrangThai())) {
+            } else if (Boolean.TRUE.equals(batch.getTrangThai()) && isBatchSafe(batch)) {
                 usableBatch = usableBatch.add(remaining);
             }
         }
@@ -1308,6 +1320,17 @@ public class InventoryService {
             return EXPIRING_SOON;
         }
         return VALID;
+    }
+
+    private boolean isBatchSafe(IngredientBatch batch) {
+        return SAFETY_SAFE.equals(safetyStatus(batch));
+    }
+
+    private String safetyStatus(IngredientBatch batch) {
+        String status = batch.getTrangThaiAnToan();
+        return status == null || status.isBlank()
+                ? SAFETY_SAFE
+                : status.trim().toUpperCase(Locale.ROOT);
     }
 
     private boolean isExpired(IngredientBatch batch) {

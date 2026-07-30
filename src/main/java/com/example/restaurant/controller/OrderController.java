@@ -173,8 +173,10 @@ public class OrderController {
 
     @PutMapping("/items/{itemId}/status")
     @PreAuthorize("hasRole('KITCHEN')")
-    public ResponseEntity<ApiResponse<OrderItem>> updateItemStatus(@PathVariable Integer itemId, @Valid @RequestBody OrderItemStatusUpdateRequest request) {
-        OrderItem orderItem = orderService.updateItemStatus(itemId, request);
+    public ResponseEntity<ApiResponse<OrderItem>> updateItemStatus(@PathVariable Integer itemId,
+                                                                    @Valid @RequestBody OrderItemStatusUpdateRequest request,
+                                                                    Authentication authentication) {
+        OrderItem orderItem = orderService.updateItemStatus(itemId, request, authentication.getName());
         return ResponseEntity.ok(ApiResponse.success("Cập nhật trạng thái món ăn thành công", orderItem));
     }
 

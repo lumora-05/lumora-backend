@@ -24,7 +24,8 @@ import java.time.LocalDateTime;
         indexes = {
                 @Index(name = "idx_lo_nguyen_lieu_nguyen_lieu", columnList = "ma_nguyen_lieu"),
                 @Index(name = "idx_lo_nguyen_lieu_han_su_dung", columnList = "han_su_dung"),
-                @Index(name = "idx_lo_nguyen_lieu_trang_thai", columnList = "trang_thai")
+                @Index(name = "idx_lo_nguyen_lieu_trang_thai", columnList = "trang_thai"),
+                @Index(name = "idx_lo_nguyen_lieu_an_toan", columnList = "trang_thai_an_toan")
         }
 )
 public class IngredientBatch {
@@ -64,6 +65,10 @@ public class IngredientBatch {
     @Column(name = "trang_thai", nullable = false)
     private Boolean trangThai = true;
 
+    /** Trạng thái an toàn độc lập với trạng thái hoạt động và hạn sử dụng của lô. */
+    @Column(name = "trang_thai_an_toan", length = 30)
+    private String trangThaiAnToan = "AN_TOAN";
+
     @Column(name = "ngay_tao", nullable = false)
     private LocalDateTime ngayTao;
 
@@ -98,6 +103,9 @@ public class IngredientBatch {
         }
         if (trangThai == null) {
             trangThai = true;
+        }
+        if (trangThaiAnToan == null || trangThaiAnToan.isBlank()) {
+            trangThaiAnToan = "AN_TOAN";
         }
     }
 }

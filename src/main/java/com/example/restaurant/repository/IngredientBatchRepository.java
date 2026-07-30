@@ -33,6 +33,7 @@ public interface IngredientBatchRepository
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select b from IngredientBatch b where b.nguyenLieu.maNguyenLieu = :ingredientId "
             + "and b.trangThai = true and b.soLuongConLai > 0 "
+            + "and (b.trangThaiAnToan is null or upper(b.trangThaiAnToan) = 'AN_TOAN') "
             + "order by case when b.hanSuDung is null then 1 else 0 end, "
             + "b.hanSuDung asc, b.ngayNhap asc, b.maLo asc")
     List<IngredientBatch> findAvailableByIngredientForUpdate(@Param("ingredientId") Integer ingredientId);
@@ -44,6 +45,7 @@ public interface IngredientBatchRepository
     @Query("select coalesce(sum(b.soLuongConLai), 0) from IngredientBatch b "
             + "where b.nguyenLieu.maNguyenLieu = :ingredientId "
             + "and b.trangThai = true and b.soLuongConLai > 0 "
+            + "and (b.trangThaiAnToan is null or upper(b.trangThaiAnToan) = 'AN_TOAN') "
             + "and (b.hanSuDung is null or b.hanSuDung >= :today)")
     BigDecimal sumUsableRemainingByIngredient(@Param("ingredientId") Integer ingredientId,
                                               @Param("today") LocalDate today);

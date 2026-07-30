@@ -123,6 +123,7 @@ public class OrderService {
     private final PromotionService promotionService;
     private final TableArrangementService tableArrangementService;
     private final ReservationService reservationService;
+    private final FoodTraceabilityService foodTraceabilityService;
 
     public OrderService(OrderRepository orderRepository,
                         OrderItemRepository orderItemRepository,
@@ -134,7 +135,8 @@ public class OrderService {
                         OrderPricingService orderPricingService,
                         PromotionService promotionService,
                         TableArrangementService tableArrangementService,
-                        ReservationService reservationService) {
+                        ReservationService reservationService,
+                        FoodTraceabilityService foodTraceabilityService) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.diningTableRepository = diningTableRepository;
@@ -146,6 +148,7 @@ public class OrderService {
         this.promotionService = promotionService;
         this.tableArrangementService = tableArrangementService;
         this.reservationService = reservationService;
+        this.foodTraceabilityService = foodTraceabilityService;
     }
 
     public List<Order> findAll() {
@@ -963,13 +966,12 @@ public class OrderService {
     }
 
     @Transactional
-    public OrderItem updateItemStatus(Integer itemId, OrderItemStatusUpdateRequest request) {
-        OrderItem item = orderItemRepository.findById(itemId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Không tìm thấy chi tiết đơn hàng: " + itemId
-                ));
-        Order order = item.getDonHang();
+    public OrderItem updateItemStatus(Integer itemId,
+                                      OrderItemStatusUpdateRequest request,
+                                      String username) {
+        // Khóa đơn chứa món để các thao tác bếp đồng thời không cấp phát nguyên liệu hai lần.
+        Order order = findLockedOrderByItem(itemId);
+        OrderItem item = findItemInOrder(itemId, order);
         String orderStatus = normalizeStatus(order.getTrangThai());
         if ("CHO_XAC_NHAN".equals(orderStatus)) {
             throw new ResponseStatusException(
@@ -993,6 +995,15 @@ public class OrderService {
             );
         }
         validateItemTransition(oldItemStatus, newItemStatus);
+
+        // Chỉ cấp phát ở lần đầu món đi từ chờ bếp sang chế biến/hoàn thành.
+        // Món chưa thiết lập công thức tiếp tục hoạt động như trước để bảo toàn dữ liệu cũ.
+        boolean startsCooking = !isCookingItemStatus(oldItemStatus)
+                && !isReadyForServiceStatus(oldItemStatus)
+                && (isCookingItemStatus(newItemStatus) || isReadyForServiceStatus(newItemStatus));
+        if (startsCooking) {
+            foodTraceabilityService.allocateForCooking(item, username);
+        }
 
         String oldOrderStatus = order.getTrangThai();
         item.setTrangThaiMon(newItemStatus);
@@ -1103,6 +1114,7 @@ public class OrderService {
                                           String decisionNote) {
         String oldOrderStatus = normalizeStatus(order.getTrangThai());
         item.setTrangThaiMon("DA_HUY");
+        foodTraceabilityService.markAllocatedUsageCancelled(item.getMaChiTiet());
         item.setTrangThaiHuy(ITEM_CANCELLATION_APPROVED);
         item.setNguoiXuLyHuy(handler);
         item.setThoiGianXuLyHuy(LocalDateTime.now());
