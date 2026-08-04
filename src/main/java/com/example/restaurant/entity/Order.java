@@ -35,6 +35,11 @@ public class Order {
     @JoinColumn(name = "ma_khuyen_mai")
     private Promotion khuyenMai;
 
+    /** Khách hàng thân thiết gắn với đơn khi thu ngân xác nhận thanh toán. */
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "ma_khach_hang")
+    private Customer khachHang;
+
     @Column(name = "thoi_gian_dat", nullable = false)
     private LocalDateTime thoiGianDat = LocalDateTime.now();
 
@@ -64,7 +69,19 @@ public class Order {
     @Column(name = "tien_giam", precision = 12, scale = 2)
     private BigDecimal tienGiam = BigDecimal.ZERO;
 
-    /** Số tiền cuối cùng phải thanh toán. */
+    /** Số điểm khách đã dùng cho đơn. */
+    @Column(name = "diem_da_su_dung")
+    private Integer diemDaSuDung = 0;
+
+    /** Số tiền được giảm từ điểm tích lũy. */
+    @Column(name = "tien_giam_tu_diem", precision = 12, scale = 2)
+    private BigDecimal tienGiamTuDiem = BigDecimal.ZERO;
+
+    /** Số điểm khách nhận được sau khi thanh toán. */
+    @Column(name = "diem_duoc_cong")
+    private Integer diemDuocCong = 0;
+
+    /** Số tiền cuối cùng phải thanh toán sau khuyến mãi và điểm. */
     @Column(name = "tong_tien", precision = 12, scale = 2, nullable = false)
     private BigDecimal tongTien = BigDecimal.ZERO;
 
@@ -114,8 +131,18 @@ public class Order {
         if (tienGiam == null) {
             tienGiam = BigDecimal.ZERO;
         }
+        if (diemDaSuDung == null || diemDaSuDung < 0) {
+            diemDaSuDung = 0;
+        }
+        if (tienGiamTuDiem == null || tienGiamTuDiem.signum() < 0) {
+            tienGiamTuDiem = BigDecimal.ZERO;
+        }
+        if (diemDuocCong == null || diemDuocCong < 0) {
+            diemDuocCong = 0;
+        }
         tamTinh = tamTinh.setScale(2, RoundingMode.HALF_UP);
         tienGiam = tienGiam.setScale(2, RoundingMode.HALF_UP);
+        tienGiamTuDiem = tienGiamTuDiem.setScale(2, RoundingMode.HALF_UP);
         tongTien = tongTien.setScale(2, RoundingMode.HALF_UP);
     }
 }

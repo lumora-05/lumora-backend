@@ -2,6 +2,7 @@ package com.example.restaurant.dto;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
@@ -30,6 +31,15 @@ public record PaymentRequest(
         String maGiaoDich,
 
         @Size(max = 255, message = "Ghi chú tối đa 255 ký tự")
-        String ghiChu
+        String ghiChu,
+
+        @Size(max = 20, message = "Số điện thoại khách hàng tối đa 20 ký tự")
+        String soDienThoaiKhachHang,
+
+        @Size(max = 100, message = "Họ tên khách hàng tối đa 100 ký tự")
+        String hoTenKhachHang,
+
+        @Min(value = 0, message = "Số điểm sử dụng không được âm")
+        Integer diemSuDung
 ) {
 }

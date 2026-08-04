@@ -1,6 +1,7 @@
 package com.example.restaurant.controller;
 
 import com.example.restaurant.dto.ApiResponse;
+import com.example.restaurant.dto.LoyaltyPreviewResponse;
 import com.example.restaurant.dto.PaymentRequest;
 import com.example.restaurant.dto.PaymentSlipResponse;
 import com.example.restaurant.dto.RevenueResponse;
@@ -39,6 +40,17 @@ public class PaymentController {
         return ResponseEntity.ok(ApiResponse.success("Thanh toán và tạo hóa đơn thành công", invoice));
     }
 
+    /** Xem trước số điểm có thể dùng, tiền giảm và điểm dự kiến được cộng. */
+    @GetMapping("/loyalty-preview/order/{orderId}")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
+    public ResponseEntity<ApiResponse<LoyaltyPreviewResponse>> loyaltyPreview(
+            @PathVariable Integer orderId,
+            @RequestParam(required = false) String phone,
+            @RequestParam(defaultValue = "0") Integer pointsToUse) {
+        LoyaltyPreviewResponse response = paymentService.previewLoyalty(orderId, phone, pointsToUse);
+        return ResponseEntity.ok(ApiResponse.success("Tính thử điểm tích lũy thành công", response));
+    }
+
     /**
      * Sinh VietQR theo đúng tổng tiền và nội dung của đơn. Endpoint chỉ đọc dữ
      * liệu, không tạo hóa đơn và không thay đổi trạng thái đơn hoặc bàn.
@@ -46,8 +58,10 @@ public class PaymentController {
     @GetMapping("/vietqr/order/{orderId}")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<VietQrResponse>> vietQrByOrder(
-            @PathVariable Integer orderId) {
-        VietQrResponse response = paymentService.createVietQr(orderId);
+            @PathVariable Integer orderId,
+            @RequestParam(required = false) String phone,
+            @RequestParam(defaultValue = "0") Integer pointsToUse) {
+        VietQrResponse response = paymentService.createVietQr(orderId, phone, pointsToUse);
         return ResponseEntity.ok(ApiResponse.success("Tạo VietQR cho đơn hàng thành công", response));
     }
 

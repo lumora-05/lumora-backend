@@ -1,6 +1,7 @@
 package com.example.restaurant.service;
 
 import com.example.restaurant.config.VietQrProperties;
+import com.example.restaurant.dto.LoyaltyPreviewResponse;
 import com.example.restaurant.dto.PaymentRequest;
 import com.example.restaurant.dto.PaymentSlipItemResponse;
 import com.example.restaurant.dto.PaymentSlipResponse;
@@ -73,6 +74,7 @@ public class PaymentService {
     private final OrderPricingService orderPricingService;
     private final TableArrangementService tableArrangementService;
     private final ReservationService reservationService;
+    private final LoyaltyService loyaltyService;
 
     public PaymentService(InvoiceRepository invoiceRepository,
                           OrderRepository orderRepository,
@@ -82,7 +84,8 @@ public class PaymentService {
                           VietQrProperties vietQrProperties,
                           OrderPricingService orderPricingService,
                           TableArrangementService tableArrangementService,
-                          ReservationService reservationService) {
+                          ReservationService reservationService,
+                          LoyaltyService loyaltyService) {
         this.invoiceRepository = invoiceRepository;
         this.orderRepository = orderRepository;
         this.employeeRepository = employeeRepository;
@@ -92,6 +95,7 @@ public class PaymentService {
         this.orderPricingService = orderPricingService;
         this.tableArrangementService = tableArrangementService;
         this.reservationService = reservationService;
+        this.loyaltyService = loyaltyService;
     }
 
     /**
@@ -113,8 +117,14 @@ public class PaymentService {
         orderPricingService.recalculate(order);
         ensurePayable(order);
         Employee cashier = requireCashier(username);
+        LoyaltyService.PreparedLoyalty loyalty = loyaltyService.prepareForPayment(
+                request.soDienThoaiKhachHang(),
+                request.hoTenKhachHang(),
+                request.diemSuDung(),
+                order.getTongTien()
+        );
         String paymentMethod = normalizePaymentMethod(request.phuongThucThanhToan());
-        PaymentAmounts amounts = validatePaymentAmounts(order, request, paymentMethod);
+        PaymentAmounts amounts = validatePaymentAmounts(loyalty.finalAmount(), request, paymentMethod);
         String transactionCode = METHOD_BANK_TRANSFER.equals(paymentMethod)
                 ? normalizeTransactionCode(request.maGiaoDich())
                 : null;
@@ -128,12 +138,16 @@ public class PaymentService {
         Invoice invoice = new Invoice();
         invoice.setDonHang(order);
         invoice.setNhanVien(cashier);
+        invoice.setKhachHang(loyalty.customer());
         invoice.setTamTinh(normalizedMoney(order.getTamTinh()));
         invoice.setTienGiam(normalizedMoney(order.getTienGiam()));
+        invoice.setDiemDaSuDung(loyalty.pointsUsed());
+        invoice.setTienGiamTuDiem(loyalty.pointDiscount());
+        invoice.setDiemDuocCong(loyalty.pointsEarned());
         invoice.setMaCodeKhuyenMai(
                 order.getKhuyenMai() == null ? null : order.getKhuyenMai().getMaCode()
         );
-        invoice.setTongTien(normalizedMoney(order.getTongTien()));
+        invoice.setTongTien(normalizedMoney(loyalty.finalAmount()));
         invoice.setThoiGianTao(paidAt);
         invoice.setThoiGianThanhToan(paidAt);
         invoice.setPhuongThucThanhToan(paymentMethod);
@@ -152,8 +166,14 @@ public class PaymentService {
         // bảo vệ cuối cùng nếu có hai request thanh toán đồng thời.
         Invoice savedInvoice = invoiceRepository.saveAndFlush(invoice);
 
+        order.setKhachHang(loyalty.customer());
+        order.setDiemDaSuDung(loyalty.pointsUsed());
+        order.setTienGiamTuDiem(loyalty.pointDiscount());
+        order.setDiemDuocCong(loyalty.pointsEarned());
+        order.setTongTien(loyalty.finalAmount());
         order.setTrangThai("DA_THANH_TOAN");
         Order savedOrder = orderRepository.saveAndFlush(order);
+        loyaltyService.completePayment(loyalty, savedOrder);
         reservationService.completeByOrder(savedOrder);
         releaseTableWhenNoOtherOpenOrder(savedOrder);
 
@@ -168,10 +188,27 @@ public class PaymentService {
         return savedInvoice;
     }
 
+    /** Xem trước số điểm được dùng/cộng và tổng tiền sau khi đổi điểm. */
+    @Transactional(readOnly = true)
+    public LoyaltyPreviewResponse previewLoyalty(Integer orderId,
+                                                 String phone,
+                                                 Integer pointsToUse) {
+        Order order = findPayableOrder(orderId);
+        return loyaltyService.preview(phone, pointsToUse, order.getTongTien());
+    }
+
     /** Tạo VietQR động nhưng không ghi dữ liệu vào database. */
     @Transactional(readOnly = true)
     public VietQrResponse createVietQr(Integer orderId) {
-        return buildVietQr(findPayableOrder(orderId));
+        return createVietQr(orderId, null, 0);
+    }
+
+    /** Tạo VietQR theo tổng tiền sau khi xem trước đổi điểm. */
+    @Transactional(readOnly = true)
+    public VietQrResponse createVietQr(Integer orderId, String phone, Integer pointsToUse) {
+        Order order = findPayableOrder(orderId);
+        LoyaltyPreviewResponse preview = loyaltyService.preview(phone, pointsToUse, order.getTongTien());
+        return buildVietQr(order, preview.tongThanhToan());
     }
 
     /**
@@ -321,10 +358,10 @@ public class PaymentService {
         return method;
     }
 
-    private PaymentAmounts validatePaymentAmounts(Order order,
+    private PaymentAmounts validatePaymentAmounts(BigDecimal payableTotal,
                                                    PaymentRequest request,
                                                    String method) {
-        BigDecimal total = normalizedMoney(order.getTongTien());
+        BigDecimal total = normalizedMoney(payableTotal);
 
         if (METHOD_CASH.equals(method)) {
             BigDecimal received = request.tienKhachDua();
@@ -364,6 +401,10 @@ public class PaymentService {
     }
 
     private VietQrResponse buildVietQr(Order order) {
+        return buildVietQr(order, order.getTongTien());
+    }
+
+    private VietQrResponse buildVietQr(Order order, BigDecimal payableAmount) {
         String bankId = requireConfig(vietQrProperties.getBankId(), "VIETQR_BANK_ID");
         String accountNo = requireConfig(vietQrProperties.getAccountNo(), "VIETQR_ACCOUNT_NO");
         String accountName = requireConfig(vietQrProperties.getAccountName(), "VIETQR_ACCOUNT_NAME");
@@ -378,7 +419,7 @@ public class PaymentService {
 
         BigDecimal amount;
         try {
-            amount = order.getTongTien().setScale(0, RoundingMode.UNNECESSARY);
+            amount = normalizedMoney(payableAmount).setScale(0, RoundingMode.UNNECESSARY);
         } catch (ArithmeticException exception) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,

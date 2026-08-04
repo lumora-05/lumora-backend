@@ -27,11 +27,24 @@ public class Invoice {
     @JoinColumn(name = "ma_nhan_vien", nullable = false)
     private Employee nhanVien;
 
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "ma_khach_hang")
+    private Customer khachHang;
+
     @Column(name = "tam_tinh", precision = 12, scale = 2)
     private BigDecimal tamTinh;
 
     @Column(name = "tien_giam", precision = 12, scale = 2)
     private BigDecimal tienGiam;
+
+    @Column(name = "diem_da_su_dung")
+    private Integer diemDaSuDung = 0;
+
+    @Column(name = "tien_giam_tu_diem", precision = 12, scale = 2)
+    private BigDecimal tienGiamTuDiem = BigDecimal.ZERO;
+
+    @Column(name = "diem_duoc_cong")
+    private Integer diemDuocCong = 0;
 
     @Column(name = "ma_code_khuyen_mai", length = 50)
     private String maCodeKhuyenMai;
@@ -79,6 +92,24 @@ public class Invoice {
         }
         if (trangThaiThanhToan == null || trangThaiThanhToan.isBlank()) {
             trangThaiThanhToan = "DA_THANH_TOAN";
+        }
+        initializeLoyaltyDefaults();
+    }
+
+    @PostLoad
+    void postLoad() {
+        initializeLoyaltyDefaults();
+    }
+
+    private void initializeLoyaltyDefaults() {
+        if (diemDaSuDung == null || diemDaSuDung < 0) {
+            diemDaSuDung = 0;
+        }
+        if (tienGiamTuDiem == null || tienGiamTuDiem.signum() < 0) {
+            tienGiamTuDiem = BigDecimal.ZERO;
+        }
+        if (diemDuocCong == null || diemDuocCong < 0) {
+            diemDuocCong = 0;
         }
     }
 }
