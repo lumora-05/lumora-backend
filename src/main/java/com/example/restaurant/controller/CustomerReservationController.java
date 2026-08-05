@@ -1,6 +1,7 @@
 package com.example.restaurant.controller;
 
 import com.example.restaurant.dto.*;
+import com.example.restaurant.service.ReservationPreorderService;
 import com.example.restaurant.service.ReservationService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -10,9 +11,12 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/customer/reservations")
 public class CustomerReservationController {
     private final ReservationService reservationService;
+    private final ReservationPreorderService reservationPreorderService;
 
-    public CustomerReservationController(ReservationService reservationService) {
+    public CustomerReservationController(ReservationService reservationService,
+                                         ReservationPreorderService reservationPreorderService) {
         this.reservationService = reservationService;
+        this.reservationPreorderService = reservationPreorderService;
     }
 
     @GetMapping("/areas")
@@ -63,4 +67,36 @@ public class CustomerReservationController {
                 reservationService.cancelByCustomer(code, phone, request)
         ));
     }
+    @GetMapping("/{code}/preorder")
+    public ResponseEntity<ApiResponse<ReservationPreorderResponse>> preorderDetail(
+            @PathVariable String code,
+            @RequestParam String phone) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy thực đơn đặt trước thành công",
+                reservationPreorderService.findForCustomer(code, phone)
+        ));
+    }
+
+    @PutMapping("/{code}/preorder")
+    public ResponseEntity<ApiResponse<ReservationPreorderResponse>> savePreorder(
+            @PathVariable String code,
+            @RequestParam String phone,
+            @Valid @RequestBody ReservationPreorderRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Gửi thực đơn đặt trước thành công",
+                reservationPreorderService.saveByCustomer(code, phone, request)
+        ));
+    }
+
+    @PostMapping("/{code}/preorder/cancel")
+    public ResponseEntity<ApiResponse<ReservationPreorderResponse>> cancelPreorder(
+            @PathVariable String code,
+            @RequestParam String phone,
+            @Valid @RequestBody ReservationCancelRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Hủy thực đơn đặt trước thành công",
+                reservationPreorderService.cancelByCustomer(code, phone, request)
+        ));
+    }
+
 }

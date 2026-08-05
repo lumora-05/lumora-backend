@@ -1,6 +1,7 @@
 package com.example.restaurant.controller;
 
 import com.example.restaurant.dto.*;
+import com.example.restaurant.service.ReservationPreorderService;
 import com.example.restaurant.service.ReservationService;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -18,9 +19,12 @@ import java.util.List;
 @PreAuthorize("hasAnyRole('ADMIN','WAITER')")
 public class ReservationController {
     private final ReservationService reservationService;
+    private final ReservationPreorderService reservationPreorderService;
 
-    public ReservationController(ReservationService reservationService) {
+    public ReservationController(ReservationService reservationService,
+                                 ReservationPreorderService reservationPreorderService) {
         this.reservationService = reservationService;
+        this.reservationPreorderService = reservationPreorderService;
     }
 
     @GetMapping
@@ -134,6 +138,57 @@ public class ReservationController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Hủy đặt bàn thành công",
                 reservationService.cancelByStaff(id, request, authentication.getName(), hasRole(authentication, "ROLE_ADMIN"))
+        ));
+    }
+
+
+    @GetMapping("/{id}/preorder")
+    public ResponseEntity<ApiResponse<ReservationPreorderResponse>> preorderDetail(
+            @PathVariable Integer id,
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy thực đơn đặt trước thành công",
+                reservationPreorderService.findForStaff(
+                        id, authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
+                )
+        ));
+    }
+
+    @PostMapping("/{id}/preorder/confirm")
+    public ResponseEntity<ApiResponse<ReservationPreorderResponse>> confirmPreorder(
+            @PathVariable Integer id,
+            @Valid @RequestBody(required = false) ReservationPreorderConfirmRequest request,
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Xác nhận thực đơn đặt trước thành công",
+                reservationPreorderService.confirmByStaff(
+                        id, request, authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
+                )
+        ));
+    }
+
+    @PostMapping("/{id}/preorder/reject")
+    public ResponseEntity<ApiResponse<ReservationPreorderResponse>> rejectPreorder(
+            @PathVariable Integer id,
+            @Valid @RequestBody ReservationCancelRequest request,
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Từ chối thực đơn đặt trước thành công",
+                reservationPreorderService.rejectByStaff(
+                        id, request, authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
+                )
+        ));
+    }
+
+    @PostMapping("/{id}/preorder/send-to-kitchen")
+    public ResponseEntity<ApiResponse<ReservationPreorderResponse>> sendPreorderToKitchen(
+            @PathVariable Integer id,
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Chuyển món đặt trước xuống bếp thành công",
+                reservationPreorderService.sendToKitchen(
+                        id, authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
+                )
         ));
     }
 

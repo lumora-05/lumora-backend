@@ -365,6 +365,11 @@ public class RealtimeNotificationService {
         payload.put("thoiGianCheckIn", reservation.getThoiGianCheckIn());
         payload.put("thoiGianXepBan", reservation.getThoiGianXepBan());
         payload.put("thoiGianHoanThanh", reservation.getThoiGianHoanThanh());
+        payload.put("trangThaiDatMonTruoc", reservation.getTrangThaiDatMonTruoc());
+        payload.put("thoiGianDatMonTruoc", reservation.getThoiGianDatMonTruoc());
+        payload.put("thoiGianXacNhanMonTruoc", reservation.getThoiGianXacNhanMonTruoc());
+        payload.put("thoiGianDuKienChuyenBep", reservation.getThoiGianDuKienChuyenBep());
+        payload.put("thoiGianChuyenBep", reservation.getThoiGianChuyenBep());
         return payload;
     }
 

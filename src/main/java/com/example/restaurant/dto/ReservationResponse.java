@@ -1,5 +1,6 @@
 package com.example.restaurant.dto;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public record ReservationResponse(
@@ -31,5 +32,12 @@ public record ReservationResponse(
         Integer maNguoiCheckIn,
         String tenNguoiCheckIn,
         Integer maNguoiXepBan,
-        String tenNguoiXepBan
+        String tenNguoiXepBan,
+        String trangThaiDatMonTruoc,
+        Integer soMonDatTruoc,
+        BigDecimal tongTienDatTruocDuKien,
+        LocalDateTime thoiGianDatMonTruoc,
+        LocalDateTime thoiGianXacNhanMonTruoc,
+        LocalDateTime thoiGianDuKienChuyenBep,
+        LocalDateTime thoiGianChuyenBep
 ) {}

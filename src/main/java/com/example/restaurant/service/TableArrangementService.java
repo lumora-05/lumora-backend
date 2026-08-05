@@ -109,6 +109,7 @@ public class TableArrangementService {
         if (!"TRONG".equals(normalize(target.getTrangThai()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Chỉ có thể chuyển sang bàn đang trống");
         }
+        reservationService.ensureTableAvailableForNewService(target);
 
         Order order = sourceOrders.get(0);
         Integer oldTableId = source.getMaBan();
@@ -207,6 +208,9 @@ public class TableArrangementService {
             );
         }
 
+        if (activeOrder == null) {
+            reservationService.ensureTableAvailableForNewService(primary);
+        }
         for (DiningTable table : allTables) {
             if (table.getMaBan().equals(primary.getMaBan())) {
                 continue;
@@ -223,6 +227,7 @@ public class TableArrangementService {
                         table.getTenBan() + " đang có đơn hàng đang phục vụ"
                 );
             }
+            reservationService.ensureTableAvailableForNewService(table);
         }
 
         String groupId = UUID.randomUUID().toString();

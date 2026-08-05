@@ -1,7 +1,10 @@
 package com.example.restaurant.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "dat_ban", indexes = {
@@ -91,6 +94,37 @@ public class TableReservation {
     @JoinColumn(name = "nguoi_xep_ban")
     private Employee nguoiXepBan;
 
+    /** Trạng thái phần chọn món trước: CHUA_DAT, CHO_XAC_NHAN, DA_XAC_NHAN, TU_CHOI, DA_CHUYEN_BEP, DA_HUY. */
+    @Column(name = "trang_thai_dat_mon_truoc", length = 30)
+    private String trangThaiDatMonTruoc = "CHUA_DAT";
+
+    @Column(name = "ghi_chu_dat_mon_truoc", length = 500)
+    private String ghiChuDatMonTruoc;
+
+    @Column(name = "ly_do_tu_choi_dat_mon_truoc", length = 500)
+    private String lyDoTuChoiDatMonTruoc;
+
+    @Column(name = "thoi_gian_dat_mon_truoc")
+    private LocalDateTime thoiGianDatMonTruoc;
+
+    @Column(name = "thoi_gian_xac_nhan_mon_truoc")
+    private LocalDateTime thoiGianXacNhanMonTruoc;
+
+    @Column(name = "thoi_gian_du_kien_chuyen_bep")
+    private LocalDateTime thoiGianDuKienChuyenBep;
+
+    @Column(name = "thoi_gian_chuyen_bep")
+    private LocalDateTime thoiGianChuyenBep;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "nguoi_xac_nhan_mon_truoc")
+    private Employee nguoiXacNhanMonTruoc;
+
+    @JsonIgnore
+    @OneToMany(mappedBy = "datBan", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("maChiTietDatMonTruoc ASC")
+    private List<ReservationPreorderItem> chiTietDatMonTruoc = new ArrayList<>();
+
 
     public TableReservation() {
     }
@@ -143,6 +177,30 @@ public class TableReservation {
     public void setNguoiCheckIn(Employee value) { this.nguoiCheckIn = value; }
     public Employee getNguoiXepBan() { return nguoiXepBan; }
     public void setNguoiXepBan(Employee value) { this.nguoiXepBan = value; }
+    public String getTrangThaiDatMonTruoc() { return trangThaiDatMonTruoc; }
+    public void setTrangThaiDatMonTruoc(String value) { this.trangThaiDatMonTruoc = value; }
+    public String getGhiChuDatMonTruoc() { return ghiChuDatMonTruoc; }
+    public void setGhiChuDatMonTruoc(String value) { this.ghiChuDatMonTruoc = value; }
+    public String getLyDoTuChoiDatMonTruoc() { return lyDoTuChoiDatMonTruoc; }
+    public void setLyDoTuChoiDatMonTruoc(String value) { this.lyDoTuChoiDatMonTruoc = value; }
+    public LocalDateTime getThoiGianDatMonTruoc() { return thoiGianDatMonTruoc; }
+    public void setThoiGianDatMonTruoc(LocalDateTime value) { this.thoiGianDatMonTruoc = value; }
+    public LocalDateTime getThoiGianXacNhanMonTruoc() { return thoiGianXacNhanMonTruoc; }
+    public void setThoiGianXacNhanMonTruoc(LocalDateTime value) { this.thoiGianXacNhanMonTruoc = value; }
+    public LocalDateTime getThoiGianDuKienChuyenBep() { return thoiGianDuKienChuyenBep; }
+    public void setThoiGianDuKienChuyenBep(LocalDateTime value) { this.thoiGianDuKienChuyenBep = value; }
+    public LocalDateTime getThoiGianChuyenBep() { return thoiGianChuyenBep; }
+    public void setThoiGianChuyenBep(LocalDateTime value) { this.thoiGianChuyenBep = value; }
+    public Employee getNguoiXacNhanMonTruoc() { return nguoiXacNhanMonTruoc; }
+    public void setNguoiXacNhanMonTruoc(Employee value) { this.nguoiXacNhanMonTruoc = value; }
+    public List<ReservationPreorderItem> getChiTietDatMonTruoc() { return chiTietDatMonTruoc; }
+    public void setChiTietDatMonTruoc(List<ReservationPreorderItem> value) {
+        this.chiTietDatMonTruoc = value == null ? new ArrayList<>() : value;
+    }
+    public void addPreorderItem(ReservationPreorderItem item) {
+        chiTietDatMonTruoc.add(item);
+        item.setDatBan(this);
+    }
 
     @PrePersist
     void prePersist() {
@@ -153,6 +211,9 @@ public class TableReservation {
         thoiGianCapNhat = now;
         if (trangThai == null || trangThai.isBlank()) {
             trangThai = "CHO_XAC_NHAN";
+        }
+        if (trangThaiDatMonTruoc == null || trangThaiDatMonTruoc.isBlank()) {
+            trangThaiDatMonTruoc = "CHUA_DAT";
         }
         if (thoiLuongPhut == null || thoiLuongPhut < 30) {
             thoiLuongPhut = 120;
@@ -165,6 +226,9 @@ public class TableReservation {
     @PreUpdate
     void preUpdate() {
         thoiGianCapNhat = LocalDateTime.now();
+        if (trangThaiDatMonTruoc == null || trangThaiDatMonTruoc.isBlank()) {
+            trangThaiDatMonTruoc = "CHUA_DAT";
+        }
         if (ngayGioDen != null && thoiLuongPhut != null) {
             thoiGianKetThucDuKien = ngayGioDen.plusMinutes(thoiLuongPhut);
         }

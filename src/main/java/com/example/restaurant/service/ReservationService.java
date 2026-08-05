@@ -4,6 +4,7 @@ import com.example.restaurant.dto.*;
 import com.example.restaurant.entity.DiningTable;
 import com.example.restaurant.entity.Employee;
 import com.example.restaurant.entity.Order;
+import com.example.restaurant.entity.ReservationPreorderItem;
 import com.example.restaurant.entity.TableReservation;
 import com.example.restaurant.repository.DiningTableRepository;
 import com.example.restaurant.repository.EmployeeRepository;
@@ -21,8 +22,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -47,7 +51,10 @@ public class ReservationService {
             "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN"
     );
     private static final int DEFAULT_DURATION_MINUTES = 120;
+    private static final int TABLE_PREPARATION_MINUTES = 30;
     private static final int NO_SHOW_GRACE_MINUTES = 15;
+    private static final DateTimeFormatter RESERVATION_TIME_FORMAT =
+            DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy");
 
     private final TableReservationRepository reservationRepository;
     private final DiningTableRepository diningTableRepository;
@@ -133,6 +140,7 @@ public class ReservationService {
             reservation.setNguoiXacNhan(null);
             reservation.setThoiGianXacNhan(null);
             reservation.setLyDoHuyTuChoi(null);
+            resetPreorderAfterReservationChange(reservation);
         }
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
@@ -163,6 +171,7 @@ public class ReservationService {
         }
         reservation.setTrangThai(CANCELLED);
         reservation.setLyDoHuyTuChoi(normalizeRequired(request.reason(), "Lý do hủy không được để trống"));
+        cancelPreorderIfNotSent(reservation, "Lịch đặt bàn đã bị khách hủy");
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
                 "RESERVATION_CANCELLED_BY_CUSTOMER",
@@ -319,6 +328,45 @@ public class ReservationService {
                 .toList();
     }
 
+
+    /**
+     * Bảo vệ bàn đã được giữ cho lịch đặt sắp tới trước khi bắt đầu một lượt phục vụ mới.
+     * Một lượt khách trực tiếp được ước tính dùng bàn 120 phút và nhà hàng cần thêm
+     * 30 phút để dọn, chuẩn bị bàn trước giờ khách đặt đến.
+     */
+    @Transactional(readOnly = true)
+    public void ensureTableAvailableForNewService(DiningTable table) {
+        if (table == null || table.getMaBan() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Không xác định được bàn ăn");
+        }
+
+        LocalDateTime serviceStart = LocalDateTime.now();
+        LocalDateTime serviceEndWithPreparation = serviceStart.plusMinutes(
+                DEFAULT_DURATION_MINUTES + TABLE_PREPARATION_MINUTES
+        );
+        List<TableReservation> conflicts = reservationRepository.findConflictingReservationsForNewService(
+                table.getMaBan(),
+                serviceStart,
+                serviceEndWithPreparation,
+                Set.of(CONFIRMED, ARRIVED)
+        );
+        if (conflicts.isEmpty()) {
+            return;
+        }
+
+        TableReservation nextReservation = conflicts.get(0);
+        String reservedAt = nextReservation.getNgayGioDen() == null
+                ? "sắp tới"
+                : nextReservation.getNgayGioDen().format(RESERVATION_TIME_FORMAT);
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                table.getTenBan() + " đã được giữ cho lịch đặt lúc " + reservedAt
+                        + ". Lượt phục vụ mới dự kiến kéo dài " + DEFAULT_DURATION_MINUTES
+                        + " phút và cần " + TABLE_PREPARATION_MINUTES
+                        + " phút chuẩn bị bàn. Vui lòng chọn bàn khác."
+        );
+    }
+
     @Transactional
     public ReservationResponse confirm(Integer id,
                                        ReservationConfirmRequest request,
@@ -367,6 +415,7 @@ public class ReservationService {
         requireStatus(reservation, PENDING, "Chỉ có thể từ chối yêu cầu đang chờ");
         reservation.setTrangThai(REJECTED);
         reservation.setLyDoHuyTuChoi(normalizeRequired(request.reason(), "Lý do từ chối không được để trống"));
+        cancelPreorderIfNotSent(reservation, "Lịch đặt bàn đã bị từ chối");
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
                 "RESERVATION_REJECTED",
@@ -461,6 +510,7 @@ public class ReservationService {
         }
         reservation.setTrangThai(NO_SHOW);
         reservation.setLyDoHuyTuChoi("Khách không đến sau thời gian giữ bàn");
+        cancelPreorderIfNotSent(reservation, "Khách không đến sau thời gian giữ bàn");
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
                 "RESERVATION_NO_SHOW",
@@ -496,6 +546,7 @@ public class ReservationService {
         releaseAssignedTableIfUnused(reservation);
         reservation.setTrangThai(CANCELLED);
         reservation.setLyDoHuyTuChoi(normalizeRequired(request.reason(), "Lý do hủy không được để trống"));
+        cancelPreorderIfNotSent(reservation, "Lịch đặt bàn đã bị nhân viên hủy");
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
                 "RESERVATION_CANCELLED_BY_STAFF",
@@ -508,6 +559,32 @@ public class ReservationService {
                 saved
         );
         return toResponse(saved);
+    }
+
+    /**
+     * Không tạo một đơn thường mới khi lịch đã xếp bàn còn thực đơn đặt trước đang chờ xử lý.
+     * Nhân viên cần duyệt/chuyển món đặt trước xuống bếp hoặc hủy phần đặt trước trước.
+     */
+    @Transactional
+    public void ensureNoPendingPreorderForAssignedReservation(DiningTable table) {
+        if (table == null || table.getMaBan() == null) {
+            return;
+        }
+        List<TableReservation> candidates = reservationRepository.findAssignedWithoutOrderForUpdate(
+                table.getMaBan(),
+                SEATED
+        );
+        for (TableReservation reservation : candidates) {
+            String preorderStatus = normalizeStatus(reservation.getTrangThaiDatMonTruoc());
+            if (!reservation.getChiTietDatMonTruoc().isEmpty()
+                    && Set.of("CHO_XAC_NHAN", "DA_XAC_NHAN").contains(preorderStatus)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Lịch " + reservation.getMaTraCuu()
+                                + " đang có món đặt trước. Vui lòng xử lý món đặt trước trước khi tạo đơn mới."
+                );
+            }
+        }
     }
 
     /** Gắn đơn đầu tiên được tạo tại bàn thực tế với lịch đã xếp bàn. */
@@ -872,8 +949,59 @@ public class ReservationService {
                 checker == null ? null : checker.getMaNhanVien(),
                 checker == null ? null : checker.getHoTen(),
                 assigner == null ? null : assigner.getMaNhanVien(),
-                assigner == null ? null : assigner.getHoTen()
+                assigner == null ? null : assigner.getHoTen(),
+                StringUtils.hasText(reservation.getTrangThaiDatMonTruoc())
+                        ? normalizeStatus(reservation.getTrangThaiDatMonTruoc()) : "CHUA_DAT",
+                preorderQuantity(reservation),
+                preorderTotal(reservation),
+                reservation.getThoiGianDatMonTruoc(),
+                reservation.getThoiGianXacNhanMonTruoc(),
+                reservation.getThoiGianDuKienChuyenBep(),
+                reservation.getThoiGianChuyenBep()
         );
+    }
+
+    private void resetPreorderAfterReservationChange(TableReservation reservation) {
+        String preorderStatus = normalizeStatus(reservation.getTrangThaiDatMonTruoc());
+        if (reservation.getChiTietDatMonTruoc().isEmpty()
+                || !Set.of("CHO_XAC_NHAN", "DA_XAC_NHAN", "TU_CHOI").contains(preorderStatus)) {
+            return;
+        }
+        reservation.setTrangThaiDatMonTruoc("CHO_XAC_NHAN");
+        reservation.setLyDoTuChoiDatMonTruoc(null);
+        reservation.setThoiGianXacNhanMonTruoc(null);
+        reservation.setThoiGianDuKienChuyenBep(null);
+        reservation.setThoiGianChuyenBep(null);
+        reservation.setNguoiXacNhanMonTruoc(null);
+    }
+
+    private void cancelPreorderIfNotSent(TableReservation reservation, String reason) {
+        if (reservation.getChiTietDatMonTruoc().isEmpty()
+                || "DA_CHUYEN_BEP".equals(normalizeStatus(reservation.getTrangThaiDatMonTruoc()))) {
+            return;
+        }
+        reservation.setTrangThaiDatMonTruoc("DA_HUY");
+        reservation.setLyDoTuChoiDatMonTruoc(reason);
+        reservation.setThoiGianDuKienChuyenBep(null);
+    }
+
+    private int preorderQuantity(TableReservation reservation) {
+        return reservation.getChiTietDatMonTruoc().stream()
+                .map(ReservationPreorderItem::getSoLuong)
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .sum();
+    }
+
+    private BigDecimal preorderTotal(TableReservation reservation) {
+        BigDecimal total = reservation.getChiTietDatMonTruoc().stream()
+                .map(item -> {
+                    BigDecimal unitPrice = item.getDonGia() == null ? BigDecimal.ZERO : item.getDonGia();
+                    int quantity = item.getSoLuong() == null ? 0 : item.getSoLuong();
+                    return unitPrice.multiply(BigDecimal.valueOf(quantity));
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return total.setScale(2, RoundingMode.HALF_UP);
     }
 
     private String normalizeRequired(String value, String message) {

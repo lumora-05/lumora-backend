@@ -374,6 +374,10 @@ public class OrderService {
         boolean newOrder = order == null;
         String previousStatus = newOrder ? "" : normalizeStatus(order.getTrangThai());
         if (newOrder) {
+            // Khách vãng lai/đơn mới không được chiếm bàn đã giữ cho lịch đặt sắp tới.
+            // Lịch đã check-in và xếp bàn có trạng thái DA_XEP_BAN nên vẫn tạo đơn bình thường.
+            reservationService.ensureTableAvailableForNewService(table);
+            reservationService.ensureNoPendingPreorderForAssignedReservation(table);
             order = new Order();
             order.setBanAn(table);
             order.setGhiChu(trimToNull(request.ghiChu()));
@@ -443,9 +447,10 @@ public class OrderService {
                 syncOrderTimestamps(order, previousStatus, "DA_XAC_NHAN");
                 order.setTrangThai("DA_XAC_NHAN");
             } else if (!"CHO_XAC_NHAN".equals(previousStatus)) {
-                // Đơn đã được xác nhận nhưng vừa có món mới, đưa về luồng chế biến.
-                syncOrderTimestamps(order, previousStatus, "DANG_CHE_BIEN");
-                order.setTrangThai("DANG_CHE_BIEN");
+                // Tính lại trạng thái đơn theo trạng thái thực tế của từng món.
+                // Món gọi thêm mới chỉ ở CHO_BEP nên không được chuyển đơn sang DANG_CHE_BIEN
+                // trước khi bếp thực sự bắt đầu chế biến.
+                synchronizeOrderStatusFromItems(order, true);
             }
         }
 
@@ -1298,13 +1303,18 @@ public class OrderService {
     }
 
     private void synchronizeOrderStatusFromItems(Order order) {
+        synchronizeOrderStatusFromItems(order, false);
+    }
+
+    private void synchronizeOrderStatusFromItems(Order order, boolean allowReopenFromServed) {
         List<OrderItem> items = order.getChiTietDonHang();
         if (items == null || items.isEmpty()) {
             return;
         }
         String current = normalizeStatus(order.getTrangThai());
-        if (Set.of("CHO_XAC_NHAN", "DA_PHUC_VU", "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "DA_THANH_TOAN", "DA_HUY")
-                .contains(current)) {
+        if (Set.of("CHO_XAC_NHAN", "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "DA_THANH_TOAN", "DA_HUY")
+                .contains(current)
+                || ("DA_PHUC_VU".equals(current) && !allowReopenFromServed)) {
             return;
         }
 
