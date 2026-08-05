@@ -109,7 +109,7 @@ public class CustomerController {
     @PostMapping("/orders")
     public ResponseEntity<ApiResponse<Order>> createOrder(@Valid @RequestBody OrderCreateRequest request) {
         Order order = orderService.createCustomerOrder(request);
-        return ResponseEntity.ok(ApiResponse.success("Gửi món vào đơn hàng thành công", order));
+        return ResponseEntity.ok(ApiResponse.success("Đã gửi đơn hàng trực tiếp vào bếp", order));
     }
 
     @GetMapping("/orders/{orderId}")

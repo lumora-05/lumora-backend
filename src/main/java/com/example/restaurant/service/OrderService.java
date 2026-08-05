@@ -332,7 +332,8 @@ public class OrderService {
     }
 
     /**
-     * Khách tạo đơn: đơn mới phải chờ nhân viên phục vụ xác nhận trước khi chuyển vào bếp.
+     * Khách tạo đơn: hệ thống xác nhận tự động, chuyển món trực tiếp vào bếp
+     * và đồng thời thông báo cho nhân viên phục vụ theo dõi.
      */
     @Transactional
     public Order createCustomerOrder(OrderCreateRequest request) {
@@ -376,7 +377,9 @@ public class OrderService {
             order = new Order();
             order.setBanAn(table);
             order.setGhiChu(trimToNull(request.ghiChu()));
-            order.setTrangThai(createdByStaff ? "DA_XAC_NHAN" : "CHO_XAC_NHAN");
+            // Đơn do khách quét QR hoặc phục vụ tạo đều được chuyển thẳng xuống bếp.
+            // Giữ trạng thái DA_XAC_NHAN để tương thích với luồng bếp và frontend hiện tại.
+            order.setTrangThai("DA_XAC_NHAN");
             order.setTamTinh(BigDecimal.ZERO);
             order.setTienGiam(BigDecimal.ZERO);
             order.setTongTien(BigDecimal.ZERO);
@@ -459,10 +462,9 @@ public class OrderService {
                             + (createdByStaff ? " bởi nhân viên " + actingEmployee.getHoTen() : ""),
                     savedOrder.getMaDonHang()
             );
+            // Phục vụ nhận thông báo để theo dõi, đồng thời bếp nhận đơn ngay lập tức.
             realtimeNotificationService.notifyNewOrder(savedOrder);
-            if (createdByStaff) {
-                realtimeNotificationService.notifyKitchenOrderConfirmed(savedOrder);
-            }
+            realtimeNotificationService.notifyKitchenOrderConfirmed(savedOrder);
         } else {
             systemActivityService.record(
                     "ORDER_ITEMS_ADDED",

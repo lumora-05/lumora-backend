@@ -27,12 +27,13 @@ public class RealtimeNotificationService {
     }
 
     public void notifyNewOrder(Object data) {
-        // Đơn mới chỉ gửi cho phục vụ. Bếp chỉ nhận sau khi phục vụ xác nhận.
+        // Phục vụ nhận thông báo để theo dõi đơn mới; không cần xác nhận trước khi bếp chế biến.
         send("/topic/orders", "NEW_ORDER", "Có đơn hàng mới", data);
     }
 
     public void notifyKitchenOrderConfirmed(Object data) {
-        send("/topic/kitchen", "NEW_KITCHEN_ORDER", "Đơn đã được xác nhận và chuyển tới bếp", data);
+        // Giữ tên hàm và loại sự kiện cũ để frontend hiện tại tiếp tục tương thích.
+        send("/topic/kitchen", "NEW_KITCHEN_ORDER", "Có đơn hàng mới cần chế biến", data);
     }
 
     public void notifyOrderItemsAdded(Order order, Object newItems, Integer callNumber, boolean notifyKitchen) {
