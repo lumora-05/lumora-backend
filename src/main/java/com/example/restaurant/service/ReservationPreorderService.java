@@ -349,15 +349,18 @@ public class ReservationPreorderService {
                         "Không thể chuyển xuống bếp vì món đang ngừng bán: " + foodName
                 );
             }
-            OrderItem orderItem = new OrderItem();
-            orderItem.setMonAn(food);
-            orderItem.setSoLuong(preorderItem.getSoLuong());
-            orderItem.setDonGia(preorderItem.getDonGia());
-            orderItem.setGhiChu(preorderItem.getGhiChu());
-            orderItem.setTrangThaiMon("CHO_BEP");
-            orderItem.setLanGoi(1);
-            orderItem.setThoiGianThem(now);
-            order.addItem(orderItem);
+            // Tách từng suất đặt trước thành một chi tiết riêng để bếp xử lý độc lập.
+            for (int unit = 0; unit < preorderItem.getSoLuong(); unit++) {
+                OrderItem orderItem = new OrderItem();
+                orderItem.setMonAn(food);
+                orderItem.setSoLuong(1);
+                orderItem.setDonGia(preorderItem.getDonGia());
+                orderItem.setGhiChu(preorderItem.getGhiChu());
+                orderItem.setTrangThaiMon("CHO_BEP");
+                orderItem.setLanGoi(1);
+                orderItem.setThoiGianThem(now);
+                order.addItem(orderItem);
+            }
         }
 
         orderPricingService.recalculate(order);

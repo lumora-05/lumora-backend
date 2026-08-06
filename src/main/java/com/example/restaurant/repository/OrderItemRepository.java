@@ -11,6 +11,11 @@ import java.util.List;
 public interface OrderItemRepository extends JpaRepository<OrderItem, Integer> {
     List<OrderItem> findByTrangThaiMon(String trangThaiMon);
 
+    List<OrderItem> findByTrangThaiMonAndSoLuongGreaterThanAndTrangThaiHuyIsNullOrderByMaChiTietAsc(
+            String trangThaiMon,
+            Integer soLuong
+    );
+
     List<OrderItem> findByTrangThaiHuyOrderByThoiGianYeuCauHuyDesc(String trangThaiHuy);
 
     boolean existsByMonAn_MaMonAn(Integer maMonAn);

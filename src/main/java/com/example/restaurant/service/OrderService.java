@@ -420,16 +420,20 @@ public class OrderService {
                 );
             }
 
-            OrderItem item = new OrderItem();
-            item.setMonAn(food);
-            item.setSoLuong(reqItem.soLuong());
-            item.setDonGia(food.getGia());
-            item.setGhiChu(trimToNull(reqItem.ghiChu()));
-            item.setTrangThaiMon("CHO_BEP");
-            item.setLanGoi(callNumber);
-            item.setThoiGianThem(addedAt);
-            order.addItem(item);
-            newItems.add(item);
+            // Mỗi suất ăn là một chi tiết đơn hàng riêng để bếp có thể
+            // bắt đầu, hoàn thành hoặc hoàn tác từng suất độc lập.
+            for (int unit = 0; unit < reqItem.soLuong(); unit++) {
+                OrderItem item = new OrderItem();
+                item.setMonAn(food);
+                item.setSoLuong(1);
+                item.setDonGia(food.getGia());
+                item.setGhiChu(trimToNull(reqItem.ghiChu()));
+                item.setTrangThaiMon("CHO_BEP");
+                item.setLanGoi(callNumber);
+                item.setThoiGianThem(addedAt);
+                order.addItem(item);
+                newItems.add(item);
+            }
 
         }
 

@@ -2,6 +2,7 @@ package com.example.restaurant.config;
 
 import com.example.restaurant.entity.*;
 import com.example.restaurant.repository.*;
+import com.example.restaurant.service.OrderItemUnitUpgradeService;
 import com.example.restaurant.service.QrCodeService;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
@@ -21,7 +22,8 @@ public class DataInitializer {
                                FoodRepository foodRepository,
                                DiningTableRepository diningTableRepository,
                                PasswordEncoder passwordEncoder,
-                               QrCodeService qrCodeService) {
+                               QrCodeService qrCodeService,
+                               OrderItemUnitUpgradeService orderItemUnitUpgradeService) {
         return args -> {
             Role adminRole = roleRepository.findByTenVaiTro("ADMIN")
                     .orElseGet(() -> roleRepository.save(new Role("ADMIN")));
@@ -135,6 +137,9 @@ public class DataInitializer {
                     }
                 }
             }
+
+            // Dữ liệu đơn cũ đang chờ bếp cũng được chuyển sang từng suất riêng.
+            orderItemUnitUpgradeService.splitLegacyWaitingItems();
         };
     }
 

@@ -86,6 +86,7 @@ public class Order {
     private BigDecimal tongTien = BigDecimal.ZERO;
 
     @OneToMany(mappedBy = "donHang", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("maChiTiet ASC")
     private List<OrderItem> chiTietDonHang = new ArrayList<>();
 
     @PrePersist
