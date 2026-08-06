@@ -116,7 +116,7 @@ public class CustomerController {
     public ResponseEntity<ApiResponse<Order>> orderTracking(@PathVariable Integer orderId) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Theo dõi trạng thái đơn hàng thành công",
-                orderService.findById(orderId)
+                orderService.findTableOrderForCustomer(orderId)
         ));
     }
 
@@ -153,6 +153,7 @@ public class CustomerController {
     public ResponseEntity<ApiResponse<Order>> applyPromotion(
             @PathVariable Integer orderId,
             @Valid @RequestBody PromotionCodeRequest request) {
+        orderService.findTableOrderForCustomer(orderId);
         return ResponseEntity.ok(ApiResponse.success(
                 "Áp dụng khuyến mãi thành công",
                 promotionService.applyToOrder(orderId, request.maCode())
@@ -162,6 +163,7 @@ public class CustomerController {
     /** Khách gỡ mã khuyến mãi trước khi thanh toán. */
     @DeleteMapping("/orders/{orderId}/promotion")
     public ResponseEntity<ApiResponse<Order>> removePromotion(@PathVariable Integer orderId) {
+        orderService.findTableOrderForCustomer(orderId);
         return ResponseEntity.ok(ApiResponse.success(
                 "Gỡ khuyến mãi thành công",
                 promotionService.removeFromOrder(orderId)

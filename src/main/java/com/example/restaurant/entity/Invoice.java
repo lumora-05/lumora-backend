@@ -37,6 +37,9 @@ public class Invoice {
     @Column(name = "tien_giam", precision = 12, scale = 2)
     private BigDecimal tienGiam;
 
+    @Column(name = "phi_giao_hang", precision = 12, scale = 2)
+    private BigDecimal phiGiaoHang = BigDecimal.ZERO;
+
     @Column(name = "diem_da_su_dung")
     private Integer diemDaSuDung = 0;
 
@@ -102,6 +105,9 @@ public class Invoice {
     }
 
     private void initializeLoyaltyDefaults() {
+        if (phiGiaoHang == null || phiGiaoHang.signum() < 0) {
+            phiGiaoHang = BigDecimal.ZERO;
+        }
         if (diemDaSuDung == null || diemDaSuDung < 0) {
             diemDaSuDung = 0;
         }

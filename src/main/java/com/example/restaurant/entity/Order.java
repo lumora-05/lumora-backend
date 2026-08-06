@@ -23,12 +23,23 @@ public class Order {
     private Integer maDonHang;
 
     @ManyToOne(fetch = FetchType.EAGER)
-    @JoinColumn(name = "ma_ban", nullable = false)
+    @JoinColumn(name = "ma_ban")
     private DiningTable banAn;
 
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "ma_nhan_vien")
     private Employee nhanVien;
+
+    /** TAI_BAN hoặc GIAO_HANG. Dữ liệu cũ mặc định là TAI_BAN. */
+    @Column(name = "loai_don", length = 20, nullable = false)
+    private String loaiDon = "TAI_BAN";
+
+    /** WEBSITE là nguồn mặc định; có thể mở rộng GRABFOOD ở giai đoạn sau. */
+    @Column(name = "nguon_don", length = 30, nullable = false)
+    private String nguonDon = "WEBSITE";
+
+    @OneToOne(mappedBy = "donHang", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
+    private OrderDelivery giaoHang;
 
     /** Khuyến mãi đang áp dụng cho đơn. Mỗi đơn chỉ được dùng tối đa một mã. */
     @ManyToOne(fetch = FetchType.EAGER)
@@ -115,6 +126,18 @@ public class Order {
         item.setDonHang(this);
     }
 
+    public void setGiaoHang(OrderDelivery giaoHang) {
+        this.giaoHang = giaoHang;
+        if (giaoHang != null) {
+            giaoHang.setDonHang(this);
+        }
+    }
+
+    @Transient
+    public boolean isDeliveryOrder() {
+        return "GIAO_HANG".equalsIgnoreCase(loaiDon);
+    }
+
     /** Trường tiện dụng cho frontend, bên cạnh object khuyenMai đầy đủ. */
     @Transient
     public String getMaCodeKhuyenMai() {
@@ -122,6 +145,12 @@ public class Order {
     }
 
     private void initializeMoneyDefaults() {
+        if (loaiDon == null || loaiDon.isBlank()) {
+            loaiDon = "TAI_BAN";
+        }
+        if (nguonDon == null || nguonDon.isBlank()) {
+            nguonDon = "WEBSITE";
+        }
         if (tongTien == null) {
             tongTien = BigDecimal.ZERO;
         }

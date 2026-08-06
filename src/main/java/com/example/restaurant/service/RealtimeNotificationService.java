@@ -60,6 +60,24 @@ public class RealtimeNotificationService {
         send("/topic/cashier", "ORDER_STATUS_CHANGED", "Thu ngân nhận cập nhật đơn hàng", data);
     }
 
+    public void notifyDeliveryOrderChanged(String type, String message, Order order) {
+        if (order == null) {
+            return;
+        }
+        send("/topic/delivery-orders", type, message, order);
+        send("/topic/cashier/delivery-orders", type, message, order);
+        if (order.getGiaoHang() != null
+                && order.getGiaoHang().getTrackingToken() != null
+                && !order.getGiaoHang().getTrackingToken().isBlank()) {
+            send(
+                    "/topic/customer/delivery/" + order.getGiaoHang().getTrackingToken(),
+                    type,
+                    message,
+                    order
+            );
+        }
+    }
+
     public void notifyOrderPricingChanged(Order order) {
         send("/topic/orders", "ORDER_PRICING_CHANGED", "Khuyến mãi hoặc tổng tiền đơn hàng đã thay đổi", order);
         send("/topic/cashier", "ORDER_PRICING_CHANGED", "Tổng thanh toán của đơn hàng đã thay đổi", order);
@@ -191,6 +209,16 @@ public class RealtimeNotificationService {
                     order
             );
         }
+        if (order.getGiaoHang() != null
+                && order.getGiaoHang().getTrackingToken() != null
+                && !order.getGiaoHang().getTrackingToken().isBlank()) {
+            send(
+                    "/topic/customer/delivery/" + order.getGiaoHang().getTrackingToken(),
+                    "CUSTOMER_DELIVERY_ORDER_UPDATED",
+                    "Đơn giao hàng đã được cập nhật",
+                    order
+            );
+        }
     }
 
     public void notifyMenuAvailabilityChanged(Object data) {
@@ -312,6 +340,12 @@ public class RealtimeNotificationService {
         payload.put("maBan", order.getBanAn() == null ? null : order.getBanAn().getMaBan());
         payload.put("tenBan", order.getBanAn() == null ? null : order.getBanAn().getTenBan());
         payload.put("trangThai", order.getTrangThai());
+        payload.put("loaiDon", order.getLoaiDon());
+        payload.put("nguonDon", order.getNguonDon());
+        payload.put("maVanChuyen", order.getGiaoHang() == null ? null : order.getGiaoHang().getMaVanChuyen());
+        payload.put("trangThaiGiaoHang", order.getGiaoHang() == null ? null : order.getGiaoHang().getTrangThaiGiaoHang());
+        payload.put("tenNguoiNhan", order.getGiaoHang() == null ? null : order.getGiaoHang().getTenNguoiNhan());
+        payload.put("phiGiaoHang", order.getGiaoHang() == null ? null : order.getGiaoHang().getPhiGiaoHang());
         payload.put("maCodeKhuyenMai", order.getKhuyenMai() == null ? null : order.getKhuyenMai().getMaCode());
         payload.put("tamTinh", order.getTamTinh());
         payload.put("tienGiam", order.getTienGiam());

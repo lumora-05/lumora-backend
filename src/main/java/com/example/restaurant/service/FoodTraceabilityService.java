@@ -244,11 +244,13 @@ public class FoodTraceabilityService {
                 ));
         List<OrderItemBatchUsage> usages = usageRepository.findTraceByOrderItemId(itemId);
         Order order = item.getDonHang();
+        Integer tableId = order.getBanAn() == null ? null : order.getBanAn().getMaBan();
+        String tableName = order.getBanAn() == null ? null : order.getBanAn().getTenBan();
         return new OrderItemTraceResponse(
                 item.getMaChiTiet(),
                 order.getMaDonHang(),
-                order.getBanAn().getMaBan(),
-                order.getBanAn().getTenBan(),
+                tableId,
+                tableName,
                 item.getMonAn().getMaMonAn(),
                 item.getMonAn().getTenMonAn(),
                 item.getSoLuong(),
@@ -280,7 +282,9 @@ public class FoodTraceabilityService {
             OrderItem item = usage.getChiTietDonHang();
             Order order = item.getDonHang();
             orderIds.add(order.getMaDonHang());
-            tableIds.add(order.getBanAn().getMaBan());
+            if (order.getBanAn() != null && order.getBanAn().getMaBan() != null) {
+                tableIds.add(order.getBanAn().getMaBan());
+            }
             itemIds.add(item.getMaChiTiet());
             totalUsed = totalUsed.add(safeQuantity(usage.getSoLuongSuDung()));
             String itemStatus = normalize(item.getTrangThaiMon());
@@ -294,8 +298,8 @@ public class FoodTraceabilityService {
                     usage.getMaSuDung(),
                     item.getMaChiTiet(),
                     order.getMaDonHang(),
-                    order.getBanAn().getMaBan(),
-                    order.getBanAn().getTenBan(),
+                    order.getBanAn() == null ? null : order.getBanAn().getMaBan(),
+                    order.getBanAn() == null ? null : order.getBanAn().getTenBan(),
                     item.getMonAn().getMaMonAn(),
                     item.getMonAn().getTenMonAn(),
                     item.getSoLuong(),

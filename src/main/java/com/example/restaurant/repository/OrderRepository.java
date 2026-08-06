@@ -15,6 +15,13 @@ import java.util.List;
 
 public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpecificationExecutor<Order> {
     List<Order> findByTrangThai(String trangThai);
+
+    List<Order> findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(String loaiDon);
+
+    List<Order> findByLoaiDonAndTrangThaiOrderByThoiGianDatDescMaDonHangDesc(
+            String loaiDon,
+            String trangThai
+    );
     @Query("""
             select o from Order o
             where lower(coalesce(o.banAn.khuVuc, 'Khu vực chung')) = lower(:khuVuc)

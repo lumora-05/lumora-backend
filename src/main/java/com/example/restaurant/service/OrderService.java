@@ -24,6 +24,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import jakarta.persistence.criteria.JoinType;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -62,6 +63,9 @@ public class OrderService {
             "DA_PHUC_VU",
             "CHO_THANH_TOAN",
             "SAN_SANG_THANH_TOAN",
+            "CHO_BAN_GIAO",
+            "DANG_GIAO",
+            "GIAO_THAT_BAI",
             "DA_THANH_TOAN",
             "DA_HUY"
     );
@@ -124,6 +128,7 @@ public class OrderService {
     private final TableArrangementService tableArrangementService;
     private final ReservationService reservationService;
     private final FoodTraceabilityService foodTraceabilityService;
+    private final DeliveryOrderService deliveryOrderService;
 
     public OrderService(OrderRepository orderRepository,
                         OrderItemRepository orderItemRepository,
@@ -136,7 +141,8 @@ public class OrderService {
                         PromotionService promotionService,
                         TableArrangementService tableArrangementService,
                         ReservationService reservationService,
-                        FoodTraceabilityService foodTraceabilityService) {
+                        FoodTraceabilityService foodTraceabilityService,
+                        DeliveryOrderService deliveryOrderService) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.diningTableRepository = diningTableRepository;
@@ -149,6 +155,7 @@ public class OrderService {
         this.tableArrangementService = tableArrangementService;
         this.reservationService = reservationService;
         this.foodTraceabilityService = foodTraceabilityService;
+        this.deliveryOrderService = deliveryOrderService;
     }
 
     public List<Order> findAll() {
@@ -206,17 +213,38 @@ public class OrderService {
             String pattern = "%" + normalizedKeyword.toLowerCase() + "%";
             Integer orderId = parseInteger(normalizedKeyword);
             specification = specification.and((root, query, criteriaBuilder) -> {
+                var tableJoin = root.join("banAn", JoinType.LEFT);
+                var deliveryJoin = root.join("giaoHang", JoinType.LEFT);
                 var byTable = criteriaBuilder.like(
-                        criteriaBuilder.lower(root.get("banAn").get("tenBan")),
+                        criteriaBuilder.lower(criteriaBuilder.coalesce(tableJoin.<String>get("tenBan"), "")),
                         pattern
                 );
                 var byStatus = criteriaBuilder.like(
                         criteriaBuilder.lower(root.get("trangThai")),
                         pattern
                 );
+                var byRecipient = criteriaBuilder.like(
+                        criteriaBuilder.lower(criteriaBuilder.coalesce(deliveryJoin.<String>get("tenNguoiNhan"), "")),
+                        pattern
+                );
+                var byShippingCode = criteriaBuilder.like(
+                        criteriaBuilder.lower(criteriaBuilder.coalesce(deliveryJoin.<String>get("maVanChuyen"), "")),
+                        pattern
+                );
+                var byPhone = criteriaBuilder.like(
+                        criteriaBuilder.lower(criteriaBuilder.coalesce(deliveryJoin.<String>get("soDienThoaiNhan"), "")),
+                        pattern
+                );
                 return orderId == null
-                        ? criteriaBuilder.or(byTable, byStatus)
-                        : criteriaBuilder.or(criteriaBuilder.equal(root.get("maDonHang"), orderId), byTable, byStatus);
+                        ? criteriaBuilder.or(byTable, byStatus, byRecipient, byShippingCode, byPhone)
+                        : criteriaBuilder.or(
+                                criteriaBuilder.equal(root.get("maDonHang"), orderId),
+                                byTable,
+                                byStatus,
+                                byRecipient,
+                                byShippingCode,
+                                byPhone
+                        );
             });
         }
 
@@ -301,6 +329,16 @@ public class OrderService {
     public Order findById(Integer id) {
         return orderRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn hàng: " + id));
+    }
+
+    /** API khách tại bàn không được đọc hoặc thao tác đơn giao hàng bằng mã tăng dần. */
+    @Transactional(readOnly = true)
+    public Order findTableOrderForCustomer(Integer id) {
+        Order order = findById(id);
+        if (order.isDeliveryOrder()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn hàng tại bàn");
+        }
+        return order;
     }
 
     @Transactional(readOnly = true)
@@ -509,6 +547,13 @@ public class OrderService {
         String newStatus = normalizeStatus(request.trangThai());
         Employee actingWaiter = null;
 
+        if (order.isDeliveryOrder()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Đơn giao hàng phải được xử lý qua API nghiệp vụ giao hàng"
+            );
+        }
+
         if (!admin) {
             actingWaiter = resolveActiveWaiterByUsername(username);
             ensureWaiterCanAccessOrder(actingWaiter, order);
@@ -579,6 +624,12 @@ public class OrderService {
     @Transactional
     public Order requestPaymentByCustomer(Integer orderId) {
         Order order = findById(orderId);
+        if (order.isDeliveryOrder()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Đơn giao hàng được thanh toán theo quy trình giao tận nơi"
+            );
+        }
         String currentStatus = normalizeStatus(order.getTrangThai());
 
         // Cho phép gọi lặp lại an toàn khi request trước đã được xử lý thành công.
@@ -621,6 +672,12 @@ public class OrderService {
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy đơn hàng: " + orderId
                 ));
+        if (order.isDeliveryOrder()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Đơn giao hàng được thanh toán theo quy trình giao tận nơi"
+            );
+        }
         ensureWaiterCanAccessOrder(resolveActiveWaiterByUsername(username), order);
         String currentStatus = normalizeStatus(order.getTrangThai());
 
@@ -702,6 +759,7 @@ public class OrderService {
         if (isCookingItemStatus(currentItemStatus)) {
             item.setTrangThaiMon(ITEM_CANCELLATION_HOLD_STATUS);
             item.setTrangThaiHuy(ITEM_CANCELLATION_PENDING);
+            deliveryOrderService.synchronizeAfterKitchenUpdate(order);
             OrderItem savedItem = orderItemRepository.save(item);
             Order savedOrder = orderRepository.saveAndFlush(order);
             publishItemCancellationRequested(savedOrder, savedItem, actor.getHoTen());
@@ -858,6 +916,7 @@ public class OrderService {
         item.setThoiGianXuLyHuy(LocalDateTime.now());
         item.setGhiChuXuLyHuy(trimToNull(request == null ? null : request.ghiChu()));
         synchronizeOrderStatusFromItems(order);
+        deliveryOrderService.synchronizeAfterKitchenUpdate(order);
 
         OrderItem savedItem = orderItemRepository.save(item);
         Order savedOrder = orderRepository.saveAndFlush(order);
@@ -890,6 +949,12 @@ public class OrderService {
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy chi tiết đơn hàng: " + itemId
                 ));
+        if (order.isDeliveryOrder()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Đơn giao hàng không có bước phục vụ tại bàn"
+            );
+        }
         ensureWaiterCanAccessOrder(resolveActiveWaiterByUsername(username), order);
 
         OrderItem item = orderItemRepository.findById(itemId)
@@ -990,8 +1055,8 @@ public class OrderService {
                     "Đơn hàng chưa được nhân viên phục vụ xác nhận"
             );
         }
-        if (Set.of("DA_THANH_TOAN", "DA_HUY").contains(orderStatus)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng đã kết thúc, không thể cập nhật món");
+        if (Set.of("DANG_GIAO", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY").contains(orderStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng đã bàn giao hoặc kết thúc, không thể cập nhật món");
         }
 
         String oldItemStatus = normalizeStatus(item.getTrangThaiMon());
@@ -1020,6 +1085,7 @@ public class OrderService {
         item.setTrangThaiMon(newItemStatus);
         OrderItem savedItem = orderItemRepository.save(item);
         synchronizeOrderStatusFromItems(order);
+        deliveryOrderService.synchronizeAfterKitchenUpdate(order);
         orderPricingService.recalculate(order);
         orderRepository.saveAndFlush(order);
 
@@ -1065,6 +1131,12 @@ public class OrderService {
     }
 
     private void validateOrderAllowsItemCancellation(Order order) {
+        if (order != null && order.isDeliveryOrder()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Đơn giao hàng chỉ được hủy toàn bộ khi còn chờ xác nhận; không hủy lẻ món sau khi chuyển xuống bếp"
+            );
+        }
         String orderStatus = normalizeStatus(order.getTrangThai());
         if (Set.of(
                 "DA_PHUC_VU",
@@ -1143,6 +1215,7 @@ public class OrderService {
         } else {
             synchronizeOrderStatusFromItems(order);
         }
+        deliveryOrderService.synchronizeAfterKitchenUpdate(order);
     }
 
     private void validatePendingCancellation(OrderItem item) {
@@ -1316,7 +1389,7 @@ public class OrderService {
             return;
         }
         String current = normalizeStatus(order.getTrangThai());
-        if (Set.of("CHO_XAC_NHAN", "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "DA_THANH_TOAN", "DA_HUY")
+        if (Set.of("CHO_XAC_NHAN", "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "DANG_GIAO", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY")
                 .contains(current)
                 || ("DA_PHUC_VU".equals(current) && !allowReopenFromServed)) {
             return;

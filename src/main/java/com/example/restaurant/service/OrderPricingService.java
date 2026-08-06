@@ -38,9 +38,15 @@ public class OrderPricingService {
         }
 
         discount = discount.max(BigDecimal.ZERO).min(subtotal);
+        boolean chargeDeliveryFee = order.getGiaoHang() != null
+                && subtotal.signum() > 0
+                && !"DA_HUY".equalsIgnoreCase(order.getTrangThai());
+        BigDecimal deliveryFee = chargeDeliveryFee
+                ? defaultMoney(order.getGiaoHang().getPhiGiaoHang())
+                : BigDecimal.ZERO;
         order.setTamTinh(money(subtotal));
         order.setTienGiam(money(discount));
-        order.setTongTien(money(subtotal.subtract(discount)));
+        order.setTongTien(money(subtotal.subtract(discount).add(deliveryFee)));
     }
 
     public BigDecimal calculateDiscount(BigDecimal subtotal, Promotion promotion) {
