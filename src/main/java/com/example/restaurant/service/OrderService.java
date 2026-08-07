@@ -64,6 +64,7 @@ public class OrderService {
             "CHO_THANH_TOAN",
             "SAN_SANG_THANH_TOAN",
             "CHO_BAN_GIAO",
+            "CHO_TAI_XE_NHAN",
             "DANG_GIAO",
             "GIAO_THAT_BAI",
             "DA_THANH_TOAN",
@@ -1055,7 +1056,7 @@ public class OrderService {
                     "Đơn hàng chưa được nhân viên phục vụ xác nhận"
             );
         }
-        if (Set.of("DANG_GIAO", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY").contains(orderStatus)) {
+        if (Set.of("CHO_TAI_XE_NHAN", "CHO_BAN_GIAO", "DANG_GIAO", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY").contains(orderStatus)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng đã bàn giao hoặc kết thúc, không thể cập nhật món");
         }
 
@@ -1389,7 +1390,7 @@ public class OrderService {
             return;
         }
         String current = normalizeStatus(order.getTrangThai());
-        if (Set.of("CHO_XAC_NHAN", "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "DANG_GIAO", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY")
+        if (Set.of("CHO_XAC_NHAN", "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "CHO_TAI_XE_NHAN", "CHO_BAN_GIAO", "DANG_GIAO", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY")
                 .contains(current)
                 || ("DA_PHUC_VU".equals(current) && !allowReopenFromServed)) {
             return;

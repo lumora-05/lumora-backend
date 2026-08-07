@@ -74,14 +74,14 @@ public class DeliveryOrderController {
         ));
     }
 
-    /** Chỉ bàn giao sau khi bếp hoàn thành toàn bộ món và hệ thống đã sinh mã vận chuyển. */
+    /** Chỉ bàn giao sau khi bếp hoàn thành và dịch vụ vận chuyển đã điều phối tài xế. */
     @PostMapping("/{orderId}/handover")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<Order>> handover(
             @PathVariable Integer orderId,
             @Valid @RequestBody DeliveryHandoverRequest request) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Đã bàn giao đơn cho người giao hàng bên ngoài",
+                "Đã bàn giao đơn cho tài xế do đơn vị vận chuyển điều phối",
                 deliveryOrderService.handover(orderId, request)
         ));
     }
@@ -113,7 +113,7 @@ public class DeliveryOrderController {
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<Order>> retry(@PathVariable Integer orderId) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Đơn đã được đưa về trạng thái chờ bàn giao lại",
+                "Đã yêu cầu đơn vị vận chuyển điều phối lại tài xế",
                 deliveryOrderService.retry(orderId)
         ));
     }

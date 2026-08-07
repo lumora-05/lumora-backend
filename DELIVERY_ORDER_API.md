@@ -4,9 +4,9 @@
 
 - Khách đặt trực tiếp trên website LUMORA.
 - Không thêm vai trò `SHIPPER`.
-- Thu ngân hoặc admin xác nhận đơn, nhập thông tin người giao hàng bên ngoài và cập nhật kết quả giao.
+- Thu ngân hoặc admin xác nhận đơn và cập nhật kết quả giao; không nhập thủ công tài xế.
 - Bếp vẫn xử lý từng suất món riêng.
-- Mã vận chuyển chỉ được sinh tự động khi toàn bộ suất món hợp lệ đã hoàn thành.
+- Khi toàn bộ suất món hợp lệ hoàn thành, backend gọi dịch vụ vận chuyển mô phỏng để nhận mã vận đơn và thông tin tài xế.
 - Đơn giao hàng không chiếm bàn và không làm thay đổi trạng thái bàn ăn.
 
 ## Trạng thái giao hàng
@@ -15,8 +15,8 @@
 |---|---|
 | `CHO_XAC_NHAN` | Khách vừa gửi đơn, nhà hàng chưa xác nhận |
 | `DANG_CHUAN_BI` | Đơn đã xác nhận và đang được bếp chế biến |
-| `CHO_BAN_GIAO` | Tất cả món hoàn thành, đã có mã vận chuyển |
-| `DANG_GIAO` | Thu ngân đã bàn giao cho người giao hàng bên ngoài |
+| `CHO_TAI_XE_NHAN` | Tất cả món hoàn thành; dịch vụ vận chuyển đã cấp mã vận đơn và điều phối tài xế |
+| `DANG_GIAO` | Thu ngân đã bàn giao món cho tài xế được đơn vị vận chuyển điều phối |
 | `HOAN_THANH` | Giao thành công và đã tạo hóa đơn |
 | `GIAO_THAT_BAI` | Lần giao hiện tại không thành công |
 | `DA_HUY` | Khách hủy hoặc nhà hàng từ chối trước khi xác nhận |
@@ -31,7 +31,9 @@ Có thể thay đổi bằng biến môi trường:
 ```text
 DELIVERY_INNER_AREA_FEE
 DELIVERY_NEARBY_AREA_FEE
-DELIVERY_SHIPPING_CODE_PREFIX
+DELIVERY_SHIPPING_CODE_PREFIX (giữ để tương thích cấu hình cũ, không còn dùng để sinh mã mới)
+DELIVERY_MOCK_PROVIDER_NAME
+DELIVERY_MOCK_WAYBILL_PREFIX
 DELIVERY_MAX_UNITS_PER_ITEM
 DELIVERY_MAX_UNITS_PER_ORDER
 ```
@@ -134,7 +136,17 @@ Khi từ chối:
 
 Đơn VietQR phải được thu ngân xác nhận đã nhận tiền trước khi xác nhận chuyển xuống bếp.
 
-### Bàn giao cho người giao hàng bên ngoài
+### Bàn giao cho tài xế đã được điều phối
+
+Khi bếp hoàn thành toàn bộ món, backend tự gọi `DeliveryProviderService`. Bản demo dùng
+`MockDeliveryProviderService` để mô phỏng API đối tác và tự nhận:
+
+- mã vận đơn đối tác, ví dụ `GRAB-DEMO-00000125-ABC123DEF4`;
+- tên đơn vị vận chuyển;
+- tên tài xế;
+- số điện thoại tài xế.
+
+Thu ngân không nhập các thông tin này. Khi tài xế đến nhận món, thu ngân chỉ xác nhận bàn giao:
 
 ```http
 POST /api/delivery-orders/{orderId}/handover
@@ -142,14 +154,13 @@ POST /api/delivery-orders/{orderId}/handover
 
 ```json
 {
-  "donViVanChuyen": "GrabExpress",
-  "tenNguoiGiao": "Trần Văn B",
-  "soDienThoaiNguoiGiao": "0987654321",
   "ghiChuBanGiao": "Đã bàn giao đủ 3 túi"
 }
 ```
 
-Chỉ thực hiện được khi trạng thái là `CHO_BAN_GIAO` và đã có mã dạng `LUM-VC-00000125`.
+Các trường `donViVanChuyen`, `tenNguoiGiao`, `soDienThoaiNguoiGiao` trong request cũ vẫn được backend chấp nhận để tương thích frontend cũ nhưng bị bỏ qua, không thể ghi đè thông tin tài xế do đối tác điều phối.
+
+Chỉ thực hiện được khi trạng thái là `CHO_TAI_XE_NHAN` và đơn đã có đầy đủ thông tin điều phối.
 
 ### Giao thành công, thất bại và giao lại
 
@@ -170,7 +181,15 @@ Khi thất bại:
 - `complete` tạo hóa đơn và chuyển đơn hàng sang `DA_THANH_TOAN`.
 - Với COD, tiền được ghi nhận khi giao thành công.
 - Với VietQR, hệ thống yêu cầu trạng thái thanh toán đã được thu ngân xác nhận.
-- `retry` đưa đơn thất bại về `CHO_BAN_GIAO` để nhập người giao mới.
+- `retry` tự gửi lại yêu cầu đến dịch vụ vận chuyển mô phỏng, nhận mã vận đơn/tài xế mới và đưa đơn về `CHO_TAI_XE_NHAN`.
+
+## Dịch vụ vận chuyển mô phỏng
+
+- Không thêm vai trò `SHIPPER`.
+- Mô phỏng GrabExpress; không gọi API GrabExpress/Grab thật.
+- `DeliveryProviderService` là cổng tích hợp; khi có API thật chỉ thay implementation.
+- Bản demo hiện dùng `MockDeliveryProviderService` với tên hiển thị `GrabExpress (Demo)` và mã vận đơn dạng `GRAB-DEMO-...`.
+- Không cần thêm cột database so với bản giao hàng trước vì tái sử dụng `ma_van_chuyen`, `don_vi_van_chuyen`, `ten_nguoi_giao`, `so_dien_thoai_nguoi_giao`.
 
 ## Nâng cấp cơ sở dữ liệu
 

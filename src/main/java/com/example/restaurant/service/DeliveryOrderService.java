@@ -5,6 +5,7 @@ import com.example.restaurant.dto.DeliveryHandoverRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateResponse;
 import com.example.restaurant.dto.DeliveryPaymentConfirmRequest;
+import com.example.restaurant.dto.DeliveryProviderAssignment;
 import com.example.restaurant.dto.DeliveryReasonRequest;
 import com.example.restaurant.dto.DeliveryTrackingItemResponse;
 import com.example.restaurant.dto.DeliveryTrackingResponse;
@@ -47,7 +48,8 @@ public class DeliveryOrderService {
 
     private static final String DELIVERY_WAITING_CONFIRMATION = "CHO_XAC_NHAN";
     private static final String DELIVERY_PREPARING = "DANG_CHUAN_BI";
-    private static final String DELIVERY_WAITING_HANDOVER = "CHO_BAN_GIAO";
+    private static final String DELIVERY_WAITING_DRIVER = "CHO_TAI_XE_NHAN";
+    private static final String LEGACY_DELIVERY_WAITING_HANDOVER = "CHO_BAN_GIAO";
     private static final String DELIVERY_IN_TRANSIT = "DANG_GIAO";
     private static final String DELIVERY_COMPLETED = "HOAN_THANH";
     private static final String DELIVERY_FAILED = "GIAO_THAT_BAI";
@@ -64,6 +66,7 @@ public class DeliveryOrderService {
     private final OrderPricingService orderPricingService;
     private final PaymentService paymentService;
     private final DeliveryProperties deliveryProperties;
+    private final DeliveryProviderService deliveryProviderService;
     private final RealtimeNotificationService realtimeNotificationService;
     private final SystemActivityService systemActivityService;
 
@@ -74,6 +77,7 @@ public class DeliveryOrderService {
                                 OrderPricingService orderPricingService,
                                 PaymentService paymentService,
                                 DeliveryProperties deliveryProperties,
+                                DeliveryProviderService deliveryProviderService,
                                 RealtimeNotificationService realtimeNotificationService,
                                 SystemActivityService systemActivityService) {
         this.orderRepository = orderRepository;
@@ -83,6 +87,7 @@ public class DeliveryOrderService {
         this.orderPricingService = orderPricingService;
         this.paymentService = paymentService;
         this.deliveryProperties = deliveryProperties;
+        this.deliveryProviderService = deliveryProviderService;
         this.realtimeNotificationService = realtimeNotificationService;
         this.systemActivityService = systemActivityService;
     }
@@ -354,7 +359,8 @@ public class DeliveryOrderService {
 
     /**
      * Được OrderService gọi sau mỗi lần bếp cập nhật một suất món.
-     * Khi toàn bộ suất hợp lệ hoàn thành, hệ thống tự sinh mã vận chuyển đúng một lần.
+     * Khi toàn bộ suất hợp lệ hoàn thành, hệ thống tự gửi yêu cầu đến dịch vụ vận chuyển
+     * mô phỏng để nhận mã vận đơn và thông tin tài xế.
      */
     @Transactional
     public void synchronizeAfterKitchenUpdate(Order order) {
@@ -377,7 +383,7 @@ public class DeliveryOrderService {
                 .anyMatch(item -> "YEU_CAU_HUY".equals(normalize(item.getTrangThaiMon())));
         if (hasPendingCancellation) {
             delivery.setTrangThaiGiaoHang(DELIVERY_PREPARING);
-            delivery.setMaVanChuyen(null);
+            clearProviderAssignment(delivery);
             delivery.setThoiGianSanSang(null);
             order.setThoiGianSanSang(null);
             order.setTrangThai("DANG_CHE_BIEN");
@@ -393,7 +399,7 @@ public class DeliveryOrderService {
                 delivery.setThoiGianHuy(delivery.getThoiGianHuy() == null
                         ? LocalDateTime.now()
                         : delivery.getThoiGianHuy());
-                delivery.setMaVanChuyen(null);
+                clearProviderAssignment(delivery);
                 delivery.setThoiGianSanSang(null);
                 order.setThoiGianSanSang(null);
                 if (PAYMENT_PAID.equals(normalize(delivery.getTrangThaiThanhToan()))) {
@@ -406,8 +412,8 @@ public class DeliveryOrderService {
         boolean allCompleted = activeItems.stream()
                 .allMatch(item -> isKitchenCompleted(item.getTrangThaiMon()));
         if (allCompleted) {
-            if (!StringUtils.hasText(delivery.getMaVanChuyen())) {
-                delivery.setMaVanChuyen(generateShippingCode(order.getMaDonHang()));
+            if (!hasProviderAssignment(delivery)) {
+                assignDeliveryProvider(order, delivery);
             }
             LocalDateTime readyAt = delivery.getThoiGianSanSang();
             if (readyAt == null) {
@@ -417,18 +423,18 @@ public class DeliveryOrderService {
             if (order.getThoiGianSanSang() == null) {
                 order.setThoiGianSanSang(readyAt);
             }
-            delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_HANDOVER);
-            order.setTrangThai(DELIVERY_WAITING_HANDOVER);
+            delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_DRIVER);
+            order.setTrangThai(DELIVERY_WAITING_DRIVER);
             realtimeNotificationService.notifyDeliveryOrderChanged(
-                    "DELIVERY_READY_FOR_HANDOVER",
-                    "Đơn đã hoàn thành món và có mã vận chuyển",
+                    "DELIVERY_DRIVER_ASSIGNED",
+                    "Đơn đã hoàn thành món; đơn vị vận chuyển đã cấp mã vận đơn và điều phối tài xế",
                     order
             );
             return;
         }
 
-        if (DELIVERY_WAITING_HANDOVER.equals(deliveryStatus)) {
-            delivery.setMaVanChuyen(null);
+        if (Set.of(DELIVERY_WAITING_DRIVER, LEGACY_DELIVERY_WAITING_HANDOVER).contains(deliveryStatus)) {
+            clearProviderAssignment(delivery);
             delivery.setThoiGianSanSang(null);
         }
         order.setThoiGianSanSang(null);
@@ -442,18 +448,16 @@ public class DeliveryOrderService {
     public Order handover(Integer orderId, DeliveryHandoverRequest request) {
         Order order = lockDeliveryOrder(orderId);
         OrderDelivery delivery = order.getGiaoHang();
-        requireDeliveryStatus(delivery, DELIVERY_WAITING_HANDOVER);
-        if (!StringUtils.hasText(delivery.getMaVanChuyen())) {
+        requireAnyDeliveryStatus(delivery, DELIVERY_WAITING_DRIVER, LEGACY_DELIVERY_WAITING_HANDOVER);
+        if (!hasProviderAssignment(delivery)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Đơn chưa có mã vận chuyển. Bếp phải hoàn thành toàn bộ món trước khi bàn giao"
+                    "Đơn chưa được đơn vị vận chuyển cấp mã vận đơn và điều phối tài xế"
             );
         }
 
-        delivery.setDonViVanChuyen(requiredText(request.donViVanChuyen(), "Đơn vị vận chuyển không hợp lệ"));
-        delivery.setTenNguoiGiao(requiredText(request.tenNguoiGiao(), "Tên người giao không hợp lệ"));
-        delivery.setSoDienThoaiNguoiGiao(normalizePhone(request.soDienThoaiNguoiGiao()));
-        delivery.setGhiChuBanGiao(trimToNull(request.ghiChuBanGiao()));
+        // Thông tin đơn vị/tài xế do dịch vụ vận chuyển cấp. Thu ngân không được nhập đè thủ công.
+        delivery.setGhiChuBanGiao(request == null ? null : trimToNull(request.ghiChuBanGiao()));
         delivery.setTrangThaiGiaoHang(DELIVERY_IN_TRANSIT);
         delivery.setThoiGianBanGiao(LocalDateTime.now());
         delivery.setLyDoGiaoThatBai(null);
@@ -462,12 +466,13 @@ public class DeliveryOrderService {
 
         systemActivityService.record(
                 "DELIVERY_HANDED_OVER",
-                "Đơn " + delivery.getMaVanChuyen() + " đã bàn giao cho " + delivery.getDonViVanChuyen(),
+                "Đơn " + delivery.getMaVanChuyen() + " đã bàn giao cho tài xế "
+                        + delivery.getTenNguoiGiao() + " của " + delivery.getDonViVanChuyen(),
                 savedOrder.getMaDonHang()
         );
         realtimeNotificationService.notifyDeliveryOrderChanged(
                 "DELIVERY_IN_TRANSIT",
-                "Đơn hàng đã được bàn giao cho người giao",
+                "Đơn hàng đã được bàn giao cho tài xế do đơn vị vận chuyển điều phối",
                 savedOrder
         );
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
@@ -543,19 +548,18 @@ public class DeliveryOrderService {
         OrderDelivery delivery = order.getGiaoHang();
         requireDeliveryStatus(delivery, DELIVERY_FAILED);
 
-        delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_HANDOVER);
-        delivery.setDonViVanChuyen(null);
-        delivery.setTenNguoiGiao(null);
-        delivery.setSoDienThoaiNguoiGiao(null);
+        clearProviderAssignment(delivery);
         delivery.setGhiChuBanGiao(null);
         delivery.setThoiGianBanGiao(null);
         delivery.setLyDoGiaoThatBai(null);
-        order.setTrangThai(DELIVERY_WAITING_HANDOVER);
+        assignDeliveryProvider(order, delivery);
+        delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_DRIVER);
+        order.setTrangThai(DELIVERY_WAITING_DRIVER);
         Order savedOrder = orderRepository.saveAndFlush(order);
 
         realtimeNotificationService.notifyDeliveryOrderChanged(
-                "DELIVERY_RETRY_READY",
-                "Đơn hàng đã được đưa về chờ bàn giao lại",
+                "DELIVERY_RETRY_DRIVER_ASSIGNED",
+                "Đơn vị vận chuyển đã điều phối lại tài xế cho đơn giao lại",
                 savedOrder
         );
         return savedOrder;
@@ -641,27 +645,58 @@ public class DeliveryOrderService {
         return configuredFee.setScale(2, RoundingMode.HALF_UP);
     }
 
-    private String generateShippingCode(Integer orderId) {
-        if (orderId == null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng chưa có mã để tạo mã vận chuyển");
+    private void assignDeliveryProvider(Order order, OrderDelivery delivery) {
+        DeliveryProviderAssignment assignment = deliveryProviderService.createDelivery(order);
+        if (assignment == null
+                || !StringUtils.hasText(assignment.maVanDon())
+                || !StringUtils.hasText(assignment.donViVanChuyen())
+                || !StringUtils.hasText(assignment.tenTaiXe())
+                || !StringUtils.hasText(assignment.soDienThoaiTaiXe())) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Đơn vị vận chuyển chưa trả về đủ thông tin điều phối"
+            );
         }
-        String prefix = StringUtils.hasText(deliveryProperties.getShippingCodePrefix())
-                ? deliveryProperties.getShippingCodePrefix().trim().toUpperCase(Locale.ROOT)
-                : "LUM-VC";
-        prefix = prefix.replaceAll("[^A-Z0-9-]", "");
-        if (prefix.isBlank()) {
-            prefix = "LUM-VC";
+        OrderDelivery duplicated = deliveryRepository.findByMaVanChuyen(assignment.maVanDon()).orElse(null);
+        if (duplicated != null
+                && (duplicated.getDonHang() == null
+                || !Objects.equals(duplicated.getDonHang().getMaDonHang(), order.getMaDonHang()))) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Mã vận đơn do đơn vị vận chuyển trả về đã tồn tại"
+            );
         }
-        String code = String.format("%s-%08d", prefix, orderId);
-        OrderDelivery existing = deliveryRepository.findByMaVanChuyen(code).orElse(null);
-        if (existing == null
-                || existing.getDonHang() == null
-                || Objects.equals(existing.getDonHang().getMaDonHang(), orderId)) {
-            return code;
+        delivery.setMaVanChuyen(assignment.maVanDon().trim());
+        delivery.setDonViVanChuyen(assignment.donViVanChuyen().trim());
+        delivery.setTenNguoiGiao(assignment.tenTaiXe().trim());
+        delivery.setSoDienThoaiNguoiGiao(normalizePhone(assignment.soDienThoaiTaiXe()));
+    }
+
+    private boolean hasProviderAssignment(OrderDelivery delivery) {
+        return delivery != null
+                && StringUtils.hasText(delivery.getMaVanChuyen())
+                && StringUtils.hasText(delivery.getDonViVanChuyen())
+                && StringUtils.hasText(delivery.getTenNguoiGiao())
+                && StringUtils.hasText(delivery.getSoDienThoaiNguoiGiao());
+    }
+
+    private void clearProviderAssignment(OrderDelivery delivery) {
+        delivery.setMaVanChuyen(null);
+        delivery.setDonViVanChuyen(null);
+        delivery.setTenNguoiGiao(null);
+        delivery.setSoDienThoaiNguoiGiao(null);
+    }
+
+    private void requireAnyDeliveryStatus(OrderDelivery delivery, String... acceptedStatuses) {
+        String current = normalize(delivery.getTrangThaiGiaoHang());
+        for (String accepted : acceptedStatuses) {
+            if (Objects.equals(accepted, current)) {
+                return;
+            }
         }
         throw new ResponseStatusException(
                 HttpStatus.CONFLICT,
-                "Mã vận chuyển đã tồn tại cho một đơn khác. Vui lòng kiểm tra dữ liệu"
+                "Không thể thực hiện thao tác khi đơn đang ở trạng thái " + current
         );
     }
 

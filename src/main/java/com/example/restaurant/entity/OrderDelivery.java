@@ -42,7 +42,7 @@ public class OrderDelivery {
     @Column(name = "client_request_id", length = 100, unique = true)
     private String clientRequestId;
 
-    /** Chỉ được sinh khi toàn bộ món đã hoàn thành và đơn sẵn sàng bàn giao. */
+    /** Mã vận đơn do dịch vụ vận chuyển bên ngoài (hoặc bản mô phỏng) trả về. */
     @Column(name = "ma_van_chuyen", length = 50, unique = true)
     private String maVanChuyen;
 
@@ -81,7 +81,7 @@ public class OrderDelivery {
     @Column(name = "ghi_chu_thanh_toan", length = 500)
     private String ghiChuThanhToan;
 
-    /** CHO_XAC_NHAN, DANG_CHUAN_BI, CHO_BAN_GIAO, DANG_GIAO, HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
+    /** CHO_XAC_NHAN, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
     @Column(name = "trang_thai_giao_hang", length = 30, nullable = false)
     private String trangThaiGiaoHang = "CHO_XAC_NHAN";
 
