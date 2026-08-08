@@ -56,7 +56,7 @@ public class SecurityConfig {
                         })
                 )
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/**", "/api/customer/**", "/api/chatbot/**", "/api/menu/**", "/api/categories/active", "/api/promotions/active", "/uploads/**", "/ws/**", "/ws").permitAll()
+                        .requestMatchers("/api/auth/**", "/api/customer/**", "/api/chatbot/**", "/api/menu/**", "/api/categories/active", "/api/promotions/active", "/api/system-settings/public", "/uploads/**", "/ws/**", "/ws").permitAll()
                         .anyRequest().authenticated()
                 )
                 .authenticationProvider(authenticationProvider())

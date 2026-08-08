@@ -26,6 +26,7 @@ public class FileStorageService {
 
     private static final String FOOD_CLOUDINARY_FOLDER = "lumora/foods";
     private static final String AVATAR_CLOUDINARY_FOLDER = "lumora/avatars";
+    private static final String BRANDING_CLOUDINARY_FOLDER = "lumora/branding";
     private static final String LEGACY_FOOD_PREFIX = "/uploads/foods/";
     private static final String LEGACY_AVATAR_PREFIX = "/uploads/avatars/";
 
@@ -50,12 +51,32 @@ public class FileStorageService {
         return saveCloudinaryImage(file, AVATAR_CLOUDINARY_FOLDER, "avatar", "đại diện");
     }
 
+    public String saveBrandLogoImage(MultipartFile file) {
+        return saveCloudinaryImage(file, BRANDING_CLOUDINARY_FOLDER, "logo", "logo nhà hàng");
+    }
+
+    public String saveHomeBannerImage(MultipartFile file) {
+        return saveCloudinaryImage(file, BRANDING_CLOUDINARY_FOLDER, "banner", "banner trang chủ");
+    }
+
     public void deleteFoodImage(String imageUrl) {
         deleteImage(imageUrl, foodUploadDir, LEGACY_FOOD_PREFIX);
     }
 
     public void deleteAvatarImage(String imageUrl) {
         deleteImage(imageUrl, avatarUploadDir, LEGACY_AVATAR_PREFIX);
+    }
+
+    public void deleteBrandImage(String imageUrl) {
+        if (cloudinaryImageService.isCloudinaryUrl(imageUrl)) {
+            cloudinaryImageService.deleteByUrl(imageUrl);
+        }
+    }
+
+    public void deleteBrandImageIfDifferent(String oldImageUrl, String newImageUrl) {
+        if (oldImageUrl != null && !oldImageUrl.equals(newImageUrl)) {
+            deleteBrandImage(oldImageUrl);
+        }
     }
 
     private String saveCloudinaryImage(MultipartFile file,
