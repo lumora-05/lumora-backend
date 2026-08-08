@@ -10,6 +10,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Getter
@@ -24,6 +25,7 @@ public class SystemSetting {
     @Column(name = "ma_cai_dat")
     private Integer maCaiDat = SINGLETON_ID;
 
+    // Thông tin nhà hàng
     @Column(name = "ten_nha_hang", nullable = false, length = 120)
     private String tenNhaHang;
 
@@ -45,11 +47,73 @@ public class SystemSetting {
     @Column(name = "menu_url", length = 255)
     private String menuUrl;
 
+    // Thương hiệu & giao diện
     @Column(name = "logo_url", length = 1000)
     private String logoUrl;
 
     @Column(name = "banner_url", length = 1000)
     private String bannerUrl;
+
+    // Đặt bàn
+    @Column(name = "reservation_default_duration_minutes")
+    private Integer reservationDefaultDurationMinutes;
+
+    @Column(name = "reservation_preparation_minutes")
+    private Integer reservationPreparationMinutes;
+
+    @Column(name = "reservation_no_show_grace_minutes")
+    private Integer reservationNoShowGraceMinutes;
+
+    // Thanh toán VietQR
+    @Column(name = "vietqr_bank_id", length = 30)
+    private String vietQrBankId;
+
+    @Column(name = "vietqr_bank_name", length = 120)
+    private String vietQrBankName;
+
+    @Column(name = "vietqr_account_no", length = 50)
+    private String vietQrAccountNo;
+
+    @Column(name = "vietqr_account_name", length = 160)
+    private String vietQrAccountName;
+
+    @Column(name = "vietqr_template", length = 30)
+    private String vietQrTemplate;
+
+    @Column(name = "vietqr_description_prefix", length = 50)
+    private String vietQrDescriptionPrefix;
+
+    // Tích điểm
+    @Column(name = "loyalty_money_per_earned_point", precision = 18, scale = 2)
+    private BigDecimal loyaltyMoneyPerEarnedPoint;
+
+    @Column(name = "loyalty_value_per_redeemed_point", precision = 18, scale = 2)
+    private BigDecimal loyaltyValuePerRedeemedPoint;
+
+    @Column(name = "loyalty_minimum_redeem_points")
+    private Integer loyaltyMinimumRedeemPoints;
+
+    @Column(name = "loyalty_maximum_redeem_ratio", precision = 6, scale = 4)
+    private BigDecimal loyaltyMaximumRedeemRatio;
+
+    // Chatbot AI (không lưu API key trong database)
+    @Column(name = "chatbot_enabled")
+    private Boolean chatbotEnabled;
+
+    @Column(name = "chatbot_model", length = 120)
+    private String chatbotModel;
+
+    @Column(name = "chatbot_timeout_seconds")
+    private Integer chatbotTimeoutSeconds;
+
+    @Column(name = "chatbot_max_output_tokens")
+    private Integer chatbotMaxOutputTokens;
+
+    @Column(name = "chatbot_max_history_messages")
+    private Integer chatbotMaxHistoryMessages;
+
+    @Column(name = "chatbot_minimum_confidence", precision = 5, scale = 4)
+    private BigDecimal chatbotMinimumConfidence;
 
     @Column(name = "ngay_tao", nullable = false)
     private LocalDateTime ngayTao;

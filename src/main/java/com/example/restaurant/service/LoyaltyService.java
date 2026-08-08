@@ -1,5 +1,6 @@
 package com.example.restaurant.service;
 
+import com.example.restaurant.config.LoyaltyPolicyProperties;
 import com.example.restaurant.dto.*;
 import com.example.restaurant.entity.Customer;
 import com.example.restaurant.entity.LoyaltyTransaction;
@@ -21,11 +22,6 @@ import java.util.Locale;
 
 @Service
 public class LoyaltyService {
-    public static final BigDecimal MONEY_PER_EARNED_POINT = new BigDecimal("10000");
-    public static final BigDecimal VALUE_PER_REDEEMED_POINT = new BigDecimal("1000");
-    public static final int MINIMUM_REDEEM_POINTS = 20;
-    public static final BigDecimal MAXIMUM_REDEEM_RATIO = new BigDecimal("0.20");
-
     private static final String STATUS_ACTIVE = "HOAT_DONG";
     private static final String TYPE_EARN = "EARN";
     private static final String TYPE_REDEEM = "REDEEM";
@@ -33,20 +29,23 @@ public class LoyaltyService {
 
     private final CustomerRepository customerRepository;
     private final LoyaltyTransactionRepository loyaltyTransactionRepository;
+    private final LoyaltyPolicyProperties loyaltyPolicyProperties;
 
     public LoyaltyService(CustomerRepository customerRepository,
-                          LoyaltyTransactionRepository loyaltyTransactionRepository) {
+                          LoyaltyTransactionRepository loyaltyTransactionRepository,
+                          LoyaltyPolicyProperties loyaltyPolicyProperties) {
         this.customerRepository = customerRepository;
         this.loyaltyTransactionRepository = loyaltyTransactionRepository;
+        this.loyaltyPolicyProperties = loyaltyPolicyProperties;
     }
 
     @Transactional(readOnly = true)
     public LoyaltyPolicyResponse policy() {
         return new LoyaltyPolicyResponse(
-                MONEY_PER_EARNED_POINT,
-                VALUE_PER_REDEEMED_POINT,
-                MINIMUM_REDEEM_POINTS,
-                MAXIMUM_REDEEM_RATIO
+                moneyPerEarnedPoint(),
+                valuePerRedeemedPoint(),
+                minimumRedeemPoints(),
+                maximumRedeemRatio()
         );
     }
 
@@ -233,10 +232,10 @@ public class LoyaltyService {
                 normalizedPhone,
                 newCustomer,
                 calculation.pointsBefore(),
-                MINIMUM_REDEEM_POINTS,
+                minimumRedeemPoints(),
                 calculation.maximumUsablePoints(),
                 calculation.pointsUsed(),
-                VALUE_PER_REDEEMED_POINT,
+                valuePerRedeemedPoint(),
                 calculation.amountBeforePoints(),
                 calculation.pointDiscount(),
                 calculation.finalAmount(),
@@ -300,14 +299,14 @@ public class LoyaltyService {
         }
 
         int availablePoints = customer == null ? 0 : customer.getDiemTichLuy();
-        int maximumByRatio = baseAmount.multiply(MAXIMUM_REDEEM_RATIO)
-                .divide(VALUE_PER_REDEEMED_POINT, 0, RoundingMode.FLOOR)
+        int maximumByRatio = baseAmount.multiply(maximumRedeemRatio())
+                .divide(valuePerRedeemedPoint(), 0, RoundingMode.FLOOR)
                 .intValue();
         int maximumByAmount = baseAmount
-                .divide(VALUE_PER_REDEEMED_POINT, 0, RoundingMode.FLOOR)
+                .divide(valuePerRedeemedPoint(), 0, RoundingMode.FLOOR)
                 .intValue();
         int maximumUsableRaw = Math.min(availablePoints, Math.min(maximumByRatio, maximumByAmount));
-        int maximumUsable = maximumUsableRaw >= MINIMUM_REDEEM_POINTS ? maximumUsableRaw : 0;
+        int maximumUsable = maximumUsableRaw >= minimumRedeemPoints() ? maximumUsableRaw : 0;
 
         if (requestedPoints > 0 && customer == null) {
             throw new ResponseStatusException(
@@ -317,10 +316,10 @@ public class LoyaltyService {
                             : "Không tìm thấy khách hàng để sử dụng điểm"
             );
         }
-        if (requestedPoints > 0 && requestedPoints < MINIMUM_REDEEM_POINTS) {
+        if (requestedPoints > 0 && requestedPoints < minimumRedeemPoints()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Cần sử dụng tối thiểu " + MINIMUM_REDEEM_POINTS + " điểm"
+                    "Cần sử dụng tối thiểu " + minimumRedeemPoints() + " điểm"
             );
         }
         if (requestedPoints > availablePoints) {
@@ -333,12 +332,12 @@ public class LoyaltyService {
             );
         }
 
-        BigDecimal pointDiscount = VALUE_PER_REDEEMED_POINT
+        BigDecimal pointDiscount = valuePerRedeemedPoint()
                 .multiply(BigDecimal.valueOf(requestedPoints));
         BigDecimal finalAmount = money(baseAmount.subtract(pointDiscount));
         boolean eligibleToEarn = customer != null || newCustomer;
         int earnedPoints = eligibleToEarn
-                ? finalAmount.divide(MONEY_PER_EARNED_POINT, 0, RoundingMode.FLOOR).intValue()
+                ? finalAmount.divide(moneyPerEarnedPoint(), 0, RoundingMode.FLOOR).intValue()
                 : 0;
         int pointsAfter = safeAdd(availablePoints - requestedPoints, earnedPoints);
 
@@ -475,6 +474,22 @@ public class LoyaltyService {
         } catch (ArithmeticException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Số điểm vượt giới hạn cho phép");
         }
+    }
+
+    private BigDecimal moneyPerEarnedPoint() {
+        return loyaltyPolicyProperties.getMoneyPerEarnedPoint();
+    }
+
+    private BigDecimal valuePerRedeemedPoint() {
+        return loyaltyPolicyProperties.getValuePerRedeemedPoint();
+    }
+
+    private int minimumRedeemPoints() {
+        return loyaltyPolicyProperties.getMinimumRedeemPoints();
+    }
+
+    private BigDecimal maximumRedeemRatio() {
+        return loyaltyPolicyProperties.getMaximumRedeemRatio();
     }
 
     private BigDecimal money(BigDecimal value) {

@@ -1,6 +1,7 @@
 package com.example.restaurant.controller;
 
 import com.example.restaurant.dto.ApiResponse;
+import com.example.restaurant.dto.PublicSystemSettingResponse;
 import com.example.restaurant.dto.SystemSettingRequest;
 import com.example.restaurant.dto.SystemSettingResponse;
 import com.example.restaurant.service.SystemSettingService;
@@ -28,10 +29,10 @@ public class SystemSettingController {
     }
 
     @GetMapping("/public")
-    public ResponseEntity<ApiResponse<SystemSettingResponse>> publicSettings() {
+    public ResponseEntity<ApiResponse<PublicSystemSettingResponse>> publicSettings() {
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy thông tin nhà hàng thành công",
-                systemSettingService.getSettings()
+                systemSettingService.getPublicSettings()
         ));
     }
 

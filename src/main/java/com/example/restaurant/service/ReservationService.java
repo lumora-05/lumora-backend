@@ -1,5 +1,6 @@
 package com.example.restaurant.service;
 
+import com.example.restaurant.config.ReservationPolicyProperties;
 import com.example.restaurant.dto.*;
 import com.example.restaurant.entity.DiningTable;
 import com.example.restaurant.entity.Employee;
@@ -50,9 +51,6 @@ public class ReservationService {
             "SAN_SANG", "SAN_SANG_PHUC_VU", "DA_HOAN_THANH", "DA_PHUC_VU",
             "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN"
     );
-    private static final int DEFAULT_DURATION_MINUTES = 120;
-    private static final int TABLE_PREPARATION_MINUTES = 30;
-    private static final int NO_SHOW_GRACE_MINUTES = 15;
     private static final DateTimeFormatter RESERVATION_TIME_FORMAT =
             DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy");
 
@@ -62,19 +60,22 @@ public class ReservationService {
     private final OrderRepository orderRepository;
     private final RealtimeNotificationService realtimeNotificationService;
     private final SystemActivityService systemActivityService;
+    private final ReservationPolicyProperties reservationPolicyProperties;
 
     public ReservationService(TableReservationRepository reservationRepository,
                               DiningTableRepository diningTableRepository,
                               EmployeeRepository employeeRepository,
                               OrderRepository orderRepository,
                               RealtimeNotificationService realtimeNotificationService,
-                              SystemActivityService systemActivityService) {
+                              SystemActivityService systemActivityService,
+                              ReservationPolicyProperties reservationPolicyProperties) {
         this.reservationRepository = reservationRepository;
         this.diningTableRepository = diningTableRepository;
         this.employeeRepository = employeeRepository;
         this.orderRepository = orderRepository;
         this.realtimeNotificationService = realtimeNotificationService;
         this.systemActivityService = systemActivityService;
+        this.reservationPolicyProperties = reservationPolicyProperties;
     }
 
     @Transactional
@@ -358,7 +359,7 @@ public class ReservationService {
 
         LocalDateTime serviceStart = LocalDateTime.now();
         LocalDateTime serviceEndWithPreparation = serviceStart.plusMinutes(
-                DEFAULT_DURATION_MINUTES + TABLE_PREPARATION_MINUTES
+                defaultDurationMinutes() + tablePreparationMinutes()
         );
         List<TableReservation> conflicts = reservationRepository.findConflictingReservationsForNewService(
                 table.getMaBan(),
@@ -377,8 +378,8 @@ public class ReservationService {
         throw new ResponseStatusException(
                 HttpStatus.CONFLICT,
                 table.getTenBan() + " đã được giữ cho lịch đặt lúc " + reservedAt
-                        + ". Lượt phục vụ mới dự kiến kéo dài " + DEFAULT_DURATION_MINUTES
-                        + " phút và cần " + TABLE_PREPARATION_MINUTES
+                        + ". Lượt phục vụ mới dự kiến kéo dài " + defaultDurationMinutes()
+                        + " phút và cần " + tablePreparationMinutes()
                         + " phút chuẩn bị bàn. Vui lòng chọn bàn khác."
         );
     }
@@ -517,11 +518,11 @@ public class ReservationService {
         TableReservation reservation = findByIdForUpdate(id);
         ensureActorCanAccessReservation(reservation, username, admin);
         requireStatus(reservation, CONFIRMED, "Chỉ lịch đã xác nhận mới có thể đánh dấu không đến");
-        LocalDateTime allowedAt = reservation.getNgayGioDen().plusMinutes(NO_SHOW_GRACE_MINUTES);
+        LocalDateTime allowedAt = reservation.getNgayGioDen().plusMinutes(noShowGraceMinutes());
         if (LocalDateTime.now().isBefore(allowedAt)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Chỉ có thể đánh dấu không đến sau " + NO_SHOW_GRACE_MINUTES + " phút kể từ giờ hẹn"
+                    "Chỉ có thể đánh dấu không đến sau " + noShowGraceMinutes() + " phút kể từ giờ hẹn"
             );
         }
         reservation.setTrangThai(NO_SHOW);
@@ -918,8 +919,20 @@ public class ReservationService {
         }
     }
 
+    private int defaultDurationMinutes() {
+        return reservationPolicyProperties.getDefaultDurationMinutes();
+    }
+
+    private int tablePreparationMinutes() {
+        return reservationPolicyProperties.getTablePreparationMinutes();
+    }
+
+    private int noShowGraceMinutes() {
+        return reservationPolicyProperties.getNoShowGraceMinutes();
+    }
+
     private int normalizeDuration(Integer value) {
-        int duration = value == null ? DEFAULT_DURATION_MINUTES : value;
+        int duration = value == null ? defaultDurationMinutes() : value;
         if (duration < 30 || duration > 360) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thời lượng đặt bàn phải từ 30 đến 360 phút");
         }
