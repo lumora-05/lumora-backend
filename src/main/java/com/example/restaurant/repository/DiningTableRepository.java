@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,6 +20,13 @@ public interface DiningTableRepository extends JpaRepository<DiningTable, Intege
             order by t.maBan asc
             """)
     List<DiningTable> findByKhuVucIgnoreCaseOrderByMaBanAsc(@Param("khuVuc") String khuVuc);
+
+    @Query("""
+            select t from DiningTable t
+            where lower(coalesce(t.khuVuc, 'Khu vực chung')) in :khuVuc
+            order by t.maBan asc
+            """)
+    List<DiningTable> findByKhuVucInIgnoreCaseOrderByMaBanAsc(@Param("khuVuc") Collection<String> khuVuc);
 
     List<DiningTable> findByTrangThai(String trangThai);
 

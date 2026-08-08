@@ -51,16 +51,15 @@ public class TableService {
         return diningTableRepository.findAllByOrderByMaBanAsc();
     }
 
-    /** Danh sách bàn thuộc đúng khu vực được phân công cho nhân viên phục vụ. */
+    /** Danh sách bàn thuộc các khu vực được phân công cho nhân viên phục vụ. */
     @Transactional(readOnly = true)
     public List<DiningTable> findAllForWaiter(String username) {
         Employee waiter = resolveActiveWaiter(username);
-        if (!StringUtils.hasText(waiter.getKhuVucPhuTrach())) {
+        Set<String> assignedAreas = WaiterAreaAccess.assignedAreaKeys(waiter);
+        if (assignedAreas.isEmpty()) {
             return List.of();
         }
-        return diningTableRepository.findByKhuVucIgnoreCaseOrderByMaBanAsc(
-                waiter.getKhuVucPhuTrach().trim()
-        );
+        return diningTableRepository.findByKhuVucInIgnoreCaseOrderByMaBanAsc(assignedAreas);
     }
 
     @Transactional(readOnly = true)
@@ -270,15 +269,14 @@ public class TableService {
     }
 
     private void ensureWaiterCanAccessTable(Employee waiter, DiningTable table) {
-        if (!StringUtils.hasText(waiter.getKhuVucPhuTrach())) {
+        if (!WaiterAreaAccess.hasAssignedAreas(waiter)) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Nhân viên phục vụ chưa được phân công khu vực"
             );
         }
-        String assignedArea = waiter.getKhuVucPhuTrach().trim();
-        String tableArea = StringUtils.hasText(table.getKhuVuc()) ? table.getKhuVuc().trim() : "Khu vực chung";
-        if (!assignedArea.equalsIgnoreCase(tableArea)) {
+        String tableArea = table == null ? null : table.getKhuVuc();
+        if (!WaiterAreaAccess.canAccessArea(waiter, tableArea)) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Bàn không thuộc khu vực được phân công cho nhân viên phục vụ"

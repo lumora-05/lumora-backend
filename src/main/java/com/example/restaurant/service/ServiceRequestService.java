@@ -155,8 +155,8 @@ public class ServiceRequestService {
             requests = findForAdmin(filter);
         } else {
             Employee waiter = resolveActiveEmployee(username, "WAITER");
-            String area = requireAssignedArea(waiter);
-            requests = findForWaiter(area, filter);
+            Set<String> areas = requireAssignedAreas(waiter);
+            requests = findForWaiter(areas, filter);
         }
 
         Comparator<ServiceRequest> activeOrdering = Comparator
@@ -316,18 +316,18 @@ public class ServiceRequestService {
         return serviceRequestRepository.findByTrangThaiOrderByThoiGianTaoDesc(filter);
     }
 
-    private List<ServiceRequest> findForWaiter(String area, String filter) {
+    private List<ServiceRequest> findForWaiter(Set<String> areas, String filter) {
         if ("ALL".equals(filter)) {
-            return serviceRequestRepository.findByKhuVucIgnoreCaseOrderByThoiGianTaoDesc(area);
+            return serviceRequestRepository.findByKhuVucInIgnoreCaseOrderByThoiGianTaoDesc(areas);
         }
         if ("ACTIVE".equals(filter)) {
-            return serviceRequestRepository.findByKhuVucIgnoreCaseAndTrangThaiInOrderByThoiGianTaoAsc(
-                    area,
+            return serviceRequestRepository.findByKhuVucInIgnoreCaseAndTrangThaiInOrderByThoiGianTaoAsc(
+                    areas,
                     ACTIVE_STATUSES
             );
         }
-        return serviceRequestRepository.findByKhuVucIgnoreCaseAndTrangThaiOrderByThoiGianTaoDesc(
-                area,
+        return serviceRequestRepository.findByKhuVucInIgnoreCaseAndTrangThaiOrderByThoiGianTaoDesc(
+                areas,
                 filter
         );
     }
@@ -384,16 +384,17 @@ public class ServiceRequestService {
         return employee;
     }
 
-    private String requireAssignedArea(Employee waiter) {
-        if (!StringUtils.hasText(waiter.getKhuVucPhuTrach())) {
+    private Set<String> requireAssignedAreas(Employee waiter) {
+        Set<String> areas = WaiterAreaAccess.assignedAreaKeys(waiter);
+        if (areas.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Nhân viên phục vụ chưa được phân công khu vực");
         }
-        return waiter.getKhuVucPhuTrach().trim();
+        return areas;
     }
 
     private void ensureWaiterCanAccess(Employee waiter, ServiceRequest request) {
-        String assignedArea = requireAssignedArea(waiter);
-        if (!assignedArea.equalsIgnoreCase(normalizeArea(request.getKhuVuc()))) {
+        requireAssignedAreas(waiter);
+        if (!WaiterAreaAccess.canAccessArea(waiter, request.getKhuVuc())) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Yêu cầu không thuộc khu vực được phân công cho nhân viên phục vụ"

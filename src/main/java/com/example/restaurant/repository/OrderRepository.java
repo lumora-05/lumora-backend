@@ -33,6 +33,15 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
 
     @Query("""
             select o from Order o
+            where lower(coalesce(o.banAn.khuVuc, 'Khu vực chung')) in :khuVuc
+            order by o.thoiGianDat desc, o.maDonHang desc
+            """)
+    List<Order> findByBanAn_KhuVucInIgnoreCaseOrderByThoiGianDatDescMaDonHangDesc(
+            @Param("khuVuc") Collection<String> khuVuc
+    );
+
+    @Query("""
+            select o from Order o
             where upper(o.trangThai) = upper(:trangThai)
               and lower(coalesce(o.banAn.khuVuc, 'Khu vực chung')) = lower(:khuVuc)
             order by o.thoiGianDat desc, o.maDonHang desc
@@ -40,6 +49,17 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
     List<Order> findByTrangThaiAndBanAn_KhuVucIgnoreCaseOrderByThoiGianDatDescMaDonHangDesc(
             @Param("trangThai") String trangThai,
             @Param("khuVuc") String khuVuc
+    );
+
+    @Query("""
+            select o from Order o
+            where upper(o.trangThai) = upper(:trangThai)
+              and lower(coalesce(o.banAn.khuVuc, 'Khu vực chung')) in :khuVuc
+            order by o.thoiGianDat desc, o.maDonHang desc
+            """)
+    List<Order> findByTrangThaiAndBanAn_KhuVucInIgnoreCaseOrderByThoiGianDatDescMaDonHangDesc(
+            @Param("trangThai") String trangThai,
+            @Param("khuVuc") Collection<String> khuVuc
     );
     List<Order> findByBanAn_MaBan(Integer maBan);
     List<Order> findByThoiGianDatBetween(LocalDateTime from, LocalDateTime to);

@@ -223,9 +223,17 @@ public class ReservationService {
             ));
         }
 
-        String effectiveArea = admin ? trimToNull(area) : requireWaiterArea(username);
-        if (StringUtils.hasText(effectiveArea)) {
-            String normalizedArea = effectiveArea.trim().toLowerCase(Locale.ROOT);
+        Set<String> effectiveAreas;
+        if (admin) {
+            String adminArea = trimToNull(area);
+            effectiveAreas = StringUtils.hasText(adminArea)
+                    ? Set.of(adminArea.trim().toLowerCase(Locale.ROOT))
+                    : Set.of();
+        } else {
+            effectiveAreas = requireWaiterAreaKeys(username);
+        }
+        if (!effectiveAreas.isEmpty()) {
+            Set<String> normalizedAreas = effectiveAreas;
             spec = spec.and((root, query, cb) -> {
                 var expectedTable = root.join("banDuKien", JoinType.LEFT);
                 var actualTable = root.join("banThucTe", JoinType.LEFT);
@@ -233,19 +241,19 @@ public class ReservationService {
                 var expectedArea = expectedTable.<String>get("khuVuc");
                 var actualArea = actualTable.<String>get("khuVuc");
 
-                boolean commonArea = "khu vực chung".equals(normalizedArea);
-                var desiredAreaMatches = commonArea
-                        ? cb.or(cb.isNull(desiredArea), cb.equal(desiredArea, ""),
-                                cb.equal(cb.lower(desiredArea), normalizedArea))
-                        : cb.equal(cb.lower(desiredArea), normalizedArea);
-                var expectedAreaMatches = commonArea
-                        ? cb.or(cb.isNull(expectedArea), cb.equal(expectedArea, ""),
-                                cb.equal(cb.lower(expectedArea), normalizedArea))
-                        : cb.equal(cb.lower(expectedArea), normalizedArea);
-                var actualAreaMatches = commonArea
-                        ? cb.or(cb.isNull(actualArea), cb.equal(actualArea, ""),
-                                cb.equal(cb.lower(actualArea), normalizedArea))
-                        : cb.equal(cb.lower(actualArea), normalizedArea);
+                boolean includesCommonArea = normalizedAreas.contains("khu vực chung");
+                var desiredExplicitMatches = cb.lower(desiredArea).in(normalizedAreas);
+                var expectedExplicitMatches = cb.lower(expectedArea).in(normalizedAreas);
+                var actualExplicitMatches = cb.lower(actualArea).in(normalizedAreas);
+                var desiredAreaMatches = includesCommonArea
+                        ? cb.or(cb.isNull(desiredArea), cb.equal(desiredArea, ""), desiredExplicitMatches)
+                        : desiredExplicitMatches;
+                var expectedAreaMatches = includesCommonArea
+                        ? cb.or(cb.isNull(expectedArea), cb.equal(expectedArea, ""), expectedExplicitMatches)
+                        : expectedExplicitMatches;
+                var actualAreaMatches = includesCommonArea
+                        ? cb.or(cb.isNull(actualArea), cb.equal(actualArea, ""), actualExplicitMatches)
+                        : actualExplicitMatches;
 
                 // Khu vực của bàn thực tế được ưu tiên, sau đó bàn dự kiến, rồi khu vực khách chọn.
                 var areaMatches = cb.or(
@@ -258,13 +266,13 @@ public class ReservationService {
                         cb.and(cb.isNull(root.get("banThucTe")),
                                 cb.isNull(root.get("banDuKien")),
                                 cb.isNull(desiredArea),
-                                commonArea ? cb.conjunction() : cb.disjunction())
+                                includesCommonArea ? cb.conjunction() : cb.disjunction())
                 );
                 if (admin) {
                     return areaMatches;
                 }
                 // Yêu cầu chưa chọn khu vực/bàn được hiển thị cho mọi phục vụ;
-                // khi xác nhận, phục vụ chỉ được chọn bàn thuộc khu vực của mình.
+                // khi xác nhận, phục vụ chỉ được chọn bàn thuộc một trong các khu vực của mình.
                 var unassigned = cb.and(
                         cb.isNull(root.get("khuVucMongMuon")),
                         cb.isNull(root.get("banDuKien")),
@@ -309,13 +317,21 @@ public class ReservationService {
         }
         int safeDuration = normalizeDuration(durationMinutes);
         LocalDateTime end = arrival.plusMinutes(safeDuration);
-        String effectiveArea = admin ? trimToNull(area) : requireWaiterArea(username);
+        Set<String> effectiveAreas;
+        if (admin) {
+            String adminArea = trimToNull(area);
+            effectiveAreas = StringUtils.hasText(adminArea)
+                    ? Set.of(adminArea.trim().toLowerCase(Locale.ROOT))
+                    : Set.of();
+        } else {
+            effectiveAreas = requireWaiterAreaKeys(username);
+        }
         int excludedId = excludeReservationId == null ? 0 : excludeReservationId;
 
         return diningTableRepository.findAllByOrderByMaBanAsc().stream()
                 .filter(table -> table.getSucChua() != null && table.getSucChua() >= safePartySize)
-                .filter(table -> !StringUtils.hasText(effectiveArea)
-                        || effectiveArea.trim().equalsIgnoreCase(normalizeArea(table)))
+                .filter(table -> effectiveAreas.isEmpty()
+                        || effectiveAreas.contains(normalizeArea(table).toLowerCase(Locale.ROOT)))
                 .filter(table -> !Set.of("BAO_TRI", "DANG_DON_DEP").contains(normalizeStatus(table.getTrangThai())))
                 .map(table -> new ReservationAvailabilityResponse(
                         table.getMaBan(),
@@ -823,16 +839,20 @@ public class ReservationService {
         return employee;
     }
 
-    private String requireWaiterArea(String username) {
+    private Employee requireActiveWaiter(String username) {
         Employee employee = requireActiveEmployee(username);
         String role = employee.getVaiTro() == null ? "" : normalizeStatus(employee.getVaiTro().getTenVaiTro());
         if (!"WAITER".equals(role)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tài khoản không phải nhân viên phục vụ");
         }
-        if (!StringUtils.hasText(employee.getKhuVucPhuTrach())) {
+        if (!WaiterAreaAccess.hasAssignedAreas(employee)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Nhân viên chưa được phân công khu vực");
         }
-        return employee.getKhuVucPhuTrach().trim();
+        return employee;
+    }
+
+    private Set<String> requireWaiterAreaKeys(String username) {
+        return WaiterAreaAccess.assignedAreaKeys(requireActiveWaiter(username));
     }
 
     private void ensureActorCanAccessReservation(TableReservation reservation, String username, boolean admin) {
@@ -842,21 +862,21 @@ public class ReservationService {
     }
 
     private void ensureWaiterCanAccessReservation(TableReservation reservation, String username) {
-        String waiterArea = requireWaiterArea(username);
+        Employee waiter = requireActiveWaiter(username);
         if (reservation.getBanThucTe() == null
                 && reservation.getBanDuKien() == null
                 && !StringUtils.hasText(reservation.getKhuVucMongMuon())) {
             return;
         }
         String reservationArea = resolveReservationArea(reservation);
-        if (!waiterArea.equalsIgnoreCase(reservationArea)) {
+        if (!WaiterAreaAccess.canAccessArea(waiter, reservationArea)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Lịch đặt bàn không thuộc khu vực được phân công");
         }
     }
 
     private void ensureWaiterCanAccessTable(DiningTable table, String username) {
-        String waiterArea = requireWaiterArea(username);
-        if (!waiterArea.equalsIgnoreCase(normalizeArea(table))) {
+        Employee waiter = requireActiveWaiter(username);
+        if (!WaiterAreaAccess.canAccessArea(waiter, normalizeArea(table))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Bàn không thuộc khu vực được phân công");
         }
     }

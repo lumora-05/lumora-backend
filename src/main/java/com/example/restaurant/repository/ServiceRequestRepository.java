@@ -30,6 +30,37 @@ public interface ServiceRequestRepository extends JpaRepository<ServiceRequest, 
             Collection<String> trangThai
     );
 
+    @Query("""
+            select r from ServiceRequest r
+            where lower(coalesce(r.khuVuc, 'Khu vực chung')) in :khuVuc
+            order by r.thoiGianTao desc
+            """)
+    List<ServiceRequest> findByKhuVucInIgnoreCaseOrderByThoiGianTaoDesc(
+            @Param("khuVuc") Collection<String> khuVuc
+    );
+
+    @Query("""
+            select r from ServiceRequest r
+            where lower(coalesce(r.khuVuc, 'Khu vực chung')) in :khuVuc
+              and upper(r.trangThai) = upper(:trangThai)
+            order by r.thoiGianTao desc
+            """)
+    List<ServiceRequest> findByKhuVucInIgnoreCaseAndTrangThaiOrderByThoiGianTaoDesc(
+            @Param("khuVuc") Collection<String> khuVuc,
+            @Param("trangThai") String trangThai
+    );
+
+    @Query("""
+            select r from ServiceRequest r
+            where lower(coalesce(r.khuVuc, 'Khu vực chung')) in :khuVuc
+              and r.trangThai in :trangThai
+            order by r.thoiGianTao asc
+            """)
+    List<ServiceRequest> findByKhuVucInIgnoreCaseAndTrangThaiInOrderByThoiGianTaoAsc(
+            @Param("khuVuc") Collection<String> khuVuc,
+            @Param("trangThai") Collection<String> trangThai
+    );
+
     List<ServiceRequest> findByMaBanAndTrangThaiInOrderByThoiGianTaoDesc(
             Integer maBan,
             Collection<String> trangThai

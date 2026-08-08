@@ -449,9 +449,8 @@ public class TableArrangementService {
             return;
         }
         Employee waiter = resolveActiveWaiter(username);
-        String assignedArea = waiter.getKhuVucPhuTrach().trim();
         boolean inaccessible = tables.stream()
-                .anyMatch(table -> !assignedArea.equalsIgnoreCase(normalizeArea(table)));
+                .anyMatch(table -> !WaiterAreaAccess.canAccessArea(waiter, normalizeArea(table)));
         if (inaccessible) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
@@ -478,7 +477,7 @@ public class TableArrangementService {
         if (!"DANG_LAM_VIEC".equals(normalize(employee.getTrangThai()))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Nhân viên hiện không còn làm việc");
         }
-        if (!StringUtils.hasText(employee.getKhuVucPhuTrach())) {
+        if (!WaiterAreaAccess.hasAssignedAreas(employee)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Nhân viên phục vụ chưa được phân công khu vực");
         }
         return employee;

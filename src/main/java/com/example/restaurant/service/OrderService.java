@@ -166,12 +166,11 @@ public class OrderService {
     @Transactional(readOnly = true)
     public List<Order> findAllForWaiter(String username) {
         Employee waiter = resolveActiveWaiterByUsername(username);
-        if (!StringUtils.hasText(waiter.getKhuVucPhuTrach())) {
+        Set<String> assignedAreas = WaiterAreaAccess.assignedAreaKeys(waiter);
+        if (assignedAreas.isEmpty()) {
             return List.of();
         }
-        return orderRepository.findByBanAn_KhuVucIgnoreCaseOrderByThoiGianDatDescMaDonHangDesc(
-                waiter.getKhuVucPhuTrach().trim()
-        );
+        return orderRepository.findByBanAn_KhuVucInIgnoreCaseOrderByThoiGianDatDescMaDonHangDesc(assignedAreas);
     }
 
     @Transactional(readOnly = true)
@@ -192,20 +191,17 @@ public class OrderService {
 
         if (StringUtils.hasText(waiterUsername)) {
             Employee waiter = resolveActiveWaiterByUsername(waiterUsername);
-            if (!StringUtils.hasText(waiter.getKhuVucPhuTrach())) {
+            Set<String> assignedAreas = WaiterAreaAccess.assignedAreaKeys(waiter);
+            if (assignedAreas.isEmpty()) {
                 specification = specification.and((root, query, criteriaBuilder) -> criteriaBuilder.disjunction());
             } else {
-                String assignedArea = waiter.getKhuVucPhuTrach().trim().toLowerCase(Locale.ROOT);
                 specification = specification.and((root, query, criteriaBuilder) ->
-                        criteriaBuilder.equal(
-                                criteriaBuilder.lower(
-                                        criteriaBuilder.coalesce(
-                                                root.get("banAn").<String>get("khuVuc"),
-                                                "Khu vực chung"
-                                        )
-                                ),
-                                assignedArea
-                        ));
+                        criteriaBuilder.lower(
+                                criteriaBuilder.coalesce(
+                                        root.get("banAn").<String>get("khuVuc"),
+                                        "Khu vực chung"
+                                )
+                        ).in(assignedAreas));
             }
         }
 
@@ -310,12 +306,13 @@ public class OrderService {
     @Transactional(readOnly = true)
     public List<Order> findByStatusForWaiter(String status, String username) {
         Employee waiter = resolveActiveWaiterByUsername(username);
-        if (!StringUtils.hasText(waiter.getKhuVucPhuTrach())) {
+        Set<String> assignedAreas = WaiterAreaAccess.assignedAreaKeys(waiter);
+        if (assignedAreas.isEmpty()) {
             return List.of();
         }
-        return orderRepository.findByTrangThaiAndBanAn_KhuVucIgnoreCaseOrderByThoiGianDatDescMaDonHangDesc(
+        return orderRepository.findByTrangThaiAndBanAn_KhuVucInIgnoreCaseOrderByThoiGianDatDescMaDonHangDesc(
                 normalizeStatus(status),
-                waiter.getKhuVucPhuTrach().trim()
+                assignedAreas
         );
     }
 
@@ -1294,16 +1291,10 @@ public class OrderService {
     }
 
     private boolean waiterCanAccessOrder(Employee waiter, Order order) {
-        if (waiter == null
-                || order == null
-                || order.getBanAn() == null
-                || !StringUtils.hasText(waiter.getKhuVucPhuTrach())) {
+        if (waiter == null || order == null || order.getBanAn() == null) {
             return false;
         }
-        String tableArea = StringUtils.hasText(order.getBanAn().getKhuVuc())
-                ? order.getBanAn().getKhuVuc().trim()
-                : "Khu vực chung";
-        return waiter.getKhuVucPhuTrach().trim().equalsIgnoreCase(tableArea);
+        return WaiterAreaAccess.canAccessArea(waiter, order.getBanAn().getKhuVuc());
     }
 
     private OrderItemCancellationResponse toCancellationResponse(OrderItem item) {
@@ -1555,17 +1546,14 @@ public class OrderService {
     }
 
     private void ensureWaiterCanAccessTable(Employee waiter, DiningTable table) {
-        if (waiter == null || !StringUtils.hasText(waiter.getKhuVucPhuTrach())) {
+        if (!WaiterAreaAccess.hasAssignedAreas(waiter)) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Nhân viên phục vụ chưa được phân công khu vực"
             );
         }
-        String assignedArea = waiter.getKhuVucPhuTrach().trim();
-        String tableArea = table != null && StringUtils.hasText(table.getKhuVuc())
-                ? table.getKhuVuc().trim()
-                : "Khu vực chung";
-        if (!assignedArea.equalsIgnoreCase(tableArea)) {
+        String tableArea = table == null ? null : table.getKhuVuc();
+        if (!WaiterAreaAccess.canAccessArea(waiter, tableArea)) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Bàn hoặc đơn hàng không thuộc khu vực được phân công cho nhân viên phục vụ"

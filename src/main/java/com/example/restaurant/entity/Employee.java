@@ -7,6 +7,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 @Getter
 @Setter
@@ -43,11 +45,24 @@ public class Employee {
     private Role vaiTro;
 
     /**
-     * Tên khu vực mà nhân viên phục vụ được phân công, khớp với ban_an.khu_vuc.
-     * Chỉ áp dụng cho vai trò WAITER; các vai trò khác luôn để trống.
+     * Khu vực phụ trách cũ, được giữ lại để tương thích với dữ liệu/frontend cũ.
+     * Khi dùng cơ chế nhiều khu vực, trường này lưu khu vực đầu tiên để client cũ
+     * vẫn hiển thị được một giá trị hợp lệ.
      */
     @Column(name = "khu_vuc_phu_trach", length = 100)
     private String khuVucPhuTrach;
+
+    /**
+     * Danh sách khu vực mà nhân viên phục vụ được phân công.
+     * Một WAITER có thể phụ trách một hoặc nhiều khu vực; vai trò khác luôn để trống.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(
+            name = "nhan_vien_khu_vuc",
+            joinColumns = @JoinColumn(name = "ma_nhan_vien")
+    )
+    @Column(name = "khu_vuc", length = 100, nullable = false)
+    private Set<String> danhSachKhuVucPhuTrach = new LinkedHashSet<>();
 
     @Column(name = "trang_thai", length = 30, nullable = false)
     private String trangThai = "DANG_LAM_VIEC";

@@ -12,6 +12,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import jakarta.persistence.criteria.JoinType;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -19,8 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class EmployeeService {
@@ -65,13 +70,18 @@ public class EmployeeService {
 
         if (keyword != null && !keyword.isBlank()) {
             String pattern = "%" + keyword.trim().toLowerCase() + "%";
-            specification = specification.and((root, query, criteriaBuilder) -> criteriaBuilder.or(
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("hoTen")), pattern),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("soDienThoai")), pattern),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("email")), pattern),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("tenDangNhap")), pattern),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("khuVucPhuTrach")), pattern)
-            ));
+            specification = specification.and((root, query, criteriaBuilder) -> {
+                var assignedArea = root.join("danhSachKhuVucPhuTrach", JoinType.LEFT);
+                query.distinct(true);
+                return criteriaBuilder.or(
+                        criteriaBuilder.like(criteriaBuilder.lower(root.get("hoTen")), pattern),
+                        criteriaBuilder.like(criteriaBuilder.lower(root.get("soDienThoai")), pattern),
+                        criteriaBuilder.like(criteriaBuilder.lower(root.get("email")), pattern),
+                        criteriaBuilder.like(criteriaBuilder.lower(root.get("tenDangNhap")), pattern),
+                        criteriaBuilder.like(criteriaBuilder.lower(root.get("khuVucPhuTrach")), pattern),
+                        criteriaBuilder.like(criteriaBuilder.lower(assignedArea.as(String.class)), pattern)
+                );
+            });
         }
         if (role != null && !role.isBlank() && !"ALL".equalsIgnoreCase(role)) {
             String normalizedRole = role.trim().toUpperCase().replace("ROLE_", "");
@@ -190,14 +200,60 @@ public class EmployeeService {
 
         if (!"WAITER".equals(roleName)) {
             employee.setKhuVucPhuTrach(null);
+            employee.getDanhSachKhuVucPhuTrach().clear();
             return;
         }
 
-        // Giữ nguyên khu vực hiện tại khi client cũ cập nhật nhân viên mà chưa gửi trường mới.
-        if (!creating && request.khuVucPhuTrach() == null) {
+        // API mới ưu tiên danh sách nhiều khu vực. Client cũ vẫn có thể gửi khuVucPhuTrach.
+        if (request.danhSachKhuVucPhuTrach() != null) {
+            Set<String> areas = normalizeAreas(request.danhSachKhuVucPhuTrach());
+            employee.getDanhSachKhuVucPhuTrach().clear();
+            employee.getDanhSachKhuVucPhuTrach().addAll(areas);
+            employee.setKhuVucPhuTrach(areas.stream().findFirst().orElse(null));
             return;
         }
-        employee.setKhuVucPhuTrach(normalizeArea(request.khuVucPhuTrach()));
+
+        if (request.khuVucPhuTrach() != null) {
+            String legacyArea = normalizeArea(request.khuVucPhuTrach());
+            // Client cũ luôn gửi lại khu vực đơn. Nếu giá trị đó vẫn là khu vực chính hiện tại
+            // thì giữ nguyên danh sách nhiều khu vực đã có, tránh làm mất phân công bổ sung.
+            if (!creating
+                    && !employee.getDanhSachKhuVucPhuTrach().isEmpty()
+                    && sameArea(legacyArea, employee.getKhuVucPhuTrach())) {
+                return;
+            }
+            employee.setKhuVucPhuTrach(legacyArea);
+            employee.getDanhSachKhuVucPhuTrach().clear();
+            if (legacyArea != null) {
+                employee.getDanhSachKhuVucPhuTrach().add(legacyArea);
+            }
+            return;
+        }
+
+        // Khi cập nhật từ client cũ mà hoàn toàn không gửi thông tin khu vực thì giữ nguyên.
+        if (!creating) {
+            return;
+        }
+        employee.setKhuVucPhuTrach(null);
+        employee.getDanhSachKhuVucPhuTrach().clear();
+    }
+
+    private Set<String> normalizeAreas(Set<String> values) {
+        Map<String, String> unique = new LinkedHashMap<>();
+        if (values != null) {
+            values.stream()
+                    .filter(StringUtils::hasText)
+                    .map(String::trim)
+                    .forEach(area -> unique.putIfAbsent(area.toLowerCase(Locale.ROOT), area));
+        }
+        return new LinkedHashSet<>(unique.values());
+    }
+
+    private boolean sameArea(String left, String right) {
+        if (left == null || right == null) {
+            return left == null && right == null;
+        }
+        return left.equalsIgnoreCase(right);
     }
 
     private String normalizeArea(String value) {
