@@ -52,6 +52,18 @@ public class SystemSettingRequest {
     @Max(value = 180, message = "Thời gian chờ khách trễ không được vượt quá 180 phút")
     private Integer reservationNoShowGraceMinutes;
 
+    @Min(value = 0, message = "Thời gian cho phép check-in sớm không được âm")
+    @Max(value = 180, message = "Thời gian cho phép check-in sớm không được vượt quá 180 phút")
+    private Integer reservationCheckInEarlyMinutes;
+
+    @Min(value = 0, message = "Thời gian đặt trước tối thiểu không được âm")
+    @Max(value = 1440, message = "Thời gian đặt trước tối thiểu không được vượt quá 1440 phút")
+    private Integer reservationMinimumAdvanceMinutes;
+
+    @Min(value = 1, message = "Số ngày đặt trước tối đa phải từ 1 ngày")
+    @Max(value = 365, message = "Số ngày đặt trước tối đa không được vượt quá 365 ngày")
+    private Integer reservationMaximumAdvanceDays;
+
     // Thanh toán VietQR
     @Size(max = 30, message = "Mã ngân hàng không được vượt quá 30 ký tự")
     private String vietQrBankId;

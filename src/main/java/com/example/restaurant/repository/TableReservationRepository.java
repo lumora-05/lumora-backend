@@ -62,6 +62,45 @@ public interface TableReservationRepository extends JpaRepository<TableReservati
             @Param("serviceEndWithPreparation") LocalDateTime serviceEndWithPreparation,
             @Param("statuses") Collection<String> statuses);
 
+
+    @Query("""
+            select count(r) from TableReservation r
+            where r.trangThai in :statuses
+              and r.maDatBan <> :excludeId
+              and r.soDienThoai = :phone
+              and r.ngayGioDen < :endTime
+              and r.thoiGianKetThucDuKien > :startTime
+            """)
+    long countOverlappingForCustomer(@Param("phone") String phone,
+                                     @Param("startTime") LocalDateTime startTime,
+                                     @Param("endTime") LocalDateTime endTime,
+                                     @Param("statuses") Collection<String> statuses,
+                                     @Param("excludeId") Integer excludeId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select r from TableReservation r
+            where r.trangThai = :status
+              and r.ngayGioDen <= :deadline
+            order by r.ngayGioDen asc, r.maDatBan asc
+            """)
+    List<TableReservation> findOverdueByStatusForUpdate(@Param("status") String status,
+                                                         @Param("deadline") LocalDateTime deadline);
+
+    @Query("""
+            select count(r) from TableReservation r
+            where r.trangThai in :statuses
+              and (
+                    (r.banThucTe is not null and r.banThucTe.maBan = :tableId)
+                    or
+                    (r.banThucTe is null and r.banDuKien.maBan = :tableId)
+              )
+              and r.thoiGianKetThucDuKien > :now
+            """)
+    long countFutureOrActiveForTable(@Param("tableId") Integer tableId,
+                                     @Param("now") LocalDateTime now,
+                                     @Param("statuses") Collection<String> statuses);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select r from TableReservation r

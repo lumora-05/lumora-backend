@@ -28,6 +28,9 @@ public class SystemSettingResponse {
     private Integer reservationDefaultDurationMinutes;
     private Integer reservationPreparationMinutes;
     private Integer reservationNoShowGraceMinutes;
+    private Integer reservationCheckInEarlyMinutes;
+    private Integer reservationMinimumAdvanceMinutes;
+    private Integer reservationMaximumAdvanceDays;
 
     // Thanh toán
     private String vietQrBankId;

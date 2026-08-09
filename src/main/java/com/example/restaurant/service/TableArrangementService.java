@@ -284,6 +284,7 @@ public class TableArrangementService {
         }
 
         ensureActorCanAccessTables(username, admin, groupTables);
+        reservationService.ensureTableGroupCanBeUnmerged(groupTables);
         for (DiningTable table : groupTables) {
             if (!openOrdersForUpdate(table.getMaBan()).isEmpty()) {
                 throw new ResponseStatusException(

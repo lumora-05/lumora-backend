@@ -1,6 +1,7 @@
 package com.example.restaurant.service;
 
 import com.example.restaurant.config.ReservationPolicyProperties;
+import com.example.restaurant.config.RestaurantInfoProperties;
 import com.example.restaurant.dto.*;
 import com.example.restaurant.entity.DiningTable;
 import com.example.restaurant.entity.Employee;
@@ -43,9 +44,11 @@ public class ReservationService {
     private static final String CANCELLED = "DA_HUY";
     private static final String REJECTED = "TU_CHOI";
     private static final String NO_SHOW = "KHONG_DEN";
+    private static final String EXPIRED = "HET_HAN";
 
-    private static final Set<String> TERMINAL_STATUSES = Set.of(COMPLETED, CANCELLED, REJECTED, NO_SHOW);
+    private static final Set<String> TERMINAL_STATUSES = Set.of(COMPLETED, CANCELLED, REJECTED, NO_SHOW, EXPIRED);
     private static final Set<String> OVERLAP_STATUSES = Set.of(CONFIRMED, ARRIVED, SEATED);
+    private static final Set<String> CUSTOMER_ACTIVE_STATUSES = Set.of(PENDING, CONFIRMED, ARRIVED, SEATED);
     private static final Set<String> OPEN_ORDER_STATUSES = Set.of(
             "CHO_XAC_NHAN", "DA_XAC_NHAN", "DANG_CHUAN_BI", "DANG_CHE_BIEN",
             "SAN_SANG", "SAN_SANG_PHUC_VU", "DA_HOAN_THANH", "DA_PHUC_VU",
@@ -61,6 +64,7 @@ public class ReservationService {
     private final RealtimeNotificationService realtimeNotificationService;
     private final SystemActivityService systemActivityService;
     private final ReservationPolicyProperties reservationPolicyProperties;
+    private final RestaurantInfoProperties restaurantInfoProperties;
 
     public ReservationService(TableReservationRepository reservationRepository,
                               DiningTableRepository diningTableRepository,
@@ -68,7 +72,8 @@ public class ReservationService {
                               OrderRepository orderRepository,
                               RealtimeNotificationService realtimeNotificationService,
                               SystemActivityService systemActivityService,
-                              ReservationPolicyProperties reservationPolicyProperties) {
+                              ReservationPolicyProperties reservationPolicyProperties,
+                              RestaurantInfoProperties restaurantInfoProperties) {
         this.reservationRepository = reservationRepository;
         this.diningTableRepository = diningTableRepository;
         this.employeeRepository = employeeRepository;
@@ -76,6 +81,7 @@ public class ReservationService {
         this.realtimeNotificationService = realtimeNotificationService;
         this.systemActivityService = systemActivityService;
         this.reservationPolicyProperties = reservationPolicyProperties;
+        this.restaurantInfoProperties = restaurantInfoProperties;
     }
 
     @Transactional
@@ -330,26 +336,27 @@ public class ReservationService {
         int excludedId = excludeReservationId == null ? 0 : excludeReservationId;
 
         return diningTableRepository.findAllByOrderByMaBanAsc().stream()
-                .filter(table -> table.getSucChua() != null && table.getSucChua() >= safePartySize)
+                .filter(this::isReservationSelectableTable)
+                .filter(table -> effectiveCapacity(table) >= safePartySize)
                 .filter(table -> effectiveAreas.isEmpty()
                         || effectiveAreas.contains(normalizeArea(table).toLowerCase(Locale.ROOT)))
-                .filter(table -> !Set.of("BAO_TRI", "DANG_DON_DEP").contains(normalizeStatus(table.getTrangThai())))
+                .filter(this::isReservationTableStructureReady)
                 .map(table -> new ReservationAvailabilityResponse(
                         table.getMaBan(),
-                        table.getTenBan(),
+                        effectiveTableName(table),
                         table.getKhuVuc(),
-                        table.getSucChua(),
-                        table.getTrangThai(),
-                        !hasOverlap(table.getMaBan(), arrival, end, excludedId)
+                        effectiveCapacity(table),
+                        effectiveTableStatus(table),
+                        !hasOverlapForTableOrGroup(table, arrival, end, excludedId)
                 ))
                 .toList();
     }
 
 
     /**
-     * Bảo vệ bàn đã được giữ cho lịch đặt sắp tới trước khi bắt đầu một lượt phục vụ mới.
-     * Một lượt khách trực tiếp được ước tính dùng bàn 120 phút và nhà hàng cần thêm
-     * 30 phút để dọn, chuẩn bị bàn trước giờ khách đặt đến.
+     * Bảo vệ bàn/nhóm bàn đã được giữ cho lịch đặt sắp tới trước khi bắt đầu
+     * một lượt phục vụ mới. Thời lượng phục vụ và khoảng chuẩn bị lấy trực tiếp
+     * từ Cài đặt hệ thống.
      */
     @Transactional(readOnly = true)
     public void ensureTableAvailableForNewService(DiningTable table) {
@@ -361,23 +368,30 @@ public class ReservationService {
         LocalDateTime serviceEndWithPreparation = serviceStart.plusMinutes(
                 defaultDurationMinutes() + tablePreparationMinutes()
         );
-        List<TableReservation> conflicts = reservationRepository.findConflictingReservationsForNewService(
-                table.getMaBan(),
-                serviceStart,
-                serviceEndWithPreparation,
-                Set.of(CONFIRMED, ARRIVED)
-        );
-        if (conflicts.isEmpty()) {
+        TableReservation nextReservation = null;
+        for (DiningTable member : reservationTableMembers(table)) {
+            List<TableReservation> conflicts = reservationRepository.findConflictingReservationsForNewService(
+                    member.getMaBan(),
+                    serviceStart,
+                    serviceEndWithPreparation,
+                    Set.of(CONFIRMED, ARRIVED)
+            );
+            if (!conflicts.isEmpty()
+                    && (nextReservation == null
+                    || conflicts.get(0).getNgayGioDen().isBefore(nextReservation.getNgayGioDen()))) {
+                nextReservation = conflicts.get(0);
+            }
+        }
+        if (nextReservation == null) {
             return;
         }
 
-        TableReservation nextReservation = conflicts.get(0);
         String reservedAt = nextReservation.getNgayGioDen() == null
                 ? "sắp tới"
                 : nextReservation.getNgayGioDen().format(RESERVATION_TIME_FORMAT);
         throw new ResponseStatusException(
                 HttpStatus.CONFLICT,
-                table.getTenBan() + " đã được giữ cho lịch đặt lúc " + reservedAt
+                effectiveTableName(table) + " đã được giữ cho lịch đặt lúc " + reservedAt
                         + ". Lượt phục vụ mới dự kiến kéo dài " + defaultDurationMinutes()
                         + " phút và cần " + tablePreparationMinutes()
                         + " phút chuẩn bị bàn. Vui lòng chọn bàn khác."
@@ -392,6 +406,11 @@ public class ReservationService {
         TableReservation reservation = findByIdForUpdate(id);
         ensureActorCanAccessReservation(reservation, username, admin);
         requireStatus(reservation, PENDING, "Chỉ có thể xác nhận yêu cầu đang chờ");
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime confirmDeadline = reservation.getNgayGioDen().plusMinutes(noShowGraceMinutes());
+        if (now.isAfter(confirmDeadline)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Yêu cầu đặt bàn đã quá thời gian xác nhận");
+        }
         Employee employee = requireActiveEmployee(username);
         DiningTable table = lockTable(request.maBanDuKien());
         if (!admin) {
@@ -403,7 +422,7 @@ public class ReservationService {
         reservation.setBanDuKien(table);
         reservation.setTrangThai(CONFIRMED);
         reservation.setNguoiXacNhan(employee);
-        reservation.setThoiGianXacNhan(LocalDateTime.now());
+        reservation.setThoiGianXacNhan(now);
         reservation.setLyDoHuyTuChoi(null);
         if (StringUtils.hasText(request.ghiChu())) {
             reservation.setGhiChu(mergeNotes(reservation.getGhiChu(), request.ghiChu()));
@@ -411,7 +430,7 @@ public class ReservationService {
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
                 "RESERVATION_CONFIRMED",
-                "Đã xác nhận lịch " + saved.getMaTraCuu() + " và giữ dự kiến " + table.getTenBan(),
+                "Đã xác nhận lịch " + saved.getMaTraCuu() + " và giữ dự kiến " + effectiveTableName(table),
                 saved.getMaDatBan()
         );
         realtimeNotificationService.notifyReservationChanged(
@@ -452,10 +471,25 @@ public class ReservationService {
         TableReservation reservation = findByIdForUpdate(id);
         ensureActorCanAccessReservation(reservation, username, admin);
         requireStatus(reservation, CONFIRMED, "Chỉ có thể check-in lịch đã xác nhận");
+        LocalDateTime now = LocalDateTime.now();
+        if (!ReservationPolicyValidator.isWithinCheckInWindow(
+                now,
+                reservation.getNgayGioDen(),
+                checkInEarlyMinutes(),
+                noShowGraceMinutes()
+        )) {
+            LocalDateTime earliest = reservation.getNgayGioDen().minusMinutes(checkInEarlyMinutes());
+            LocalDateTime latest = reservation.getNgayGioDen().plusMinutes(noShowGraceMinutes());
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Chỉ có thể check-in từ " + earliest.format(RESERVATION_TIME_FORMAT)
+                            + " đến " + latest.format(RESERVATION_TIME_FORMAT)
+            );
+        }
         Employee employee = requireActiveEmployee(username);
         reservation.setTrangThai(ARRIVED);
         reservation.setNguoiCheckIn(employee);
-        reservation.setThoiGianCheckIn(LocalDateTime.now());
+        reservation.setThoiGianCheckIn(now);
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
                 "RESERVATION_CHECKED_IN",
@@ -490,13 +524,14 @@ public class ReservationService {
         reservation.setTrangThai(SEATED);
         reservation.setNguoiXepBan(employee);
         reservation.setThoiGianXepBan(LocalDateTime.now());
-        table.setTrangThai("DANG_SU_DUNG");
-        diningTableRepository.save(table);
+        List<DiningTable> assignedTables = reservationTableMembers(table);
+        assignedTables.forEach(member -> member.setTrangThai("DANG_SU_DUNG"));
+        diningTableRepository.saveAll(assignedTables);
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
 
         systemActivityService.record(
                 "RESERVATION_TABLE_ASSIGNED",
-                "Đã xếp " + table.getTenBan() + " cho lịch " + saved.getMaTraCuu(),
+                "Đã xếp " + effectiveTableName(table) + " cho lịch " + saved.getMaTraCuu(),
                 saved.getMaDatBan()
         );
         realtimeNotificationService.notifyReservationChanged(
@@ -506,9 +541,9 @@ public class ReservationService {
         );
         realtimeNotificationService.notifyTableArrangementChanged(
                 "RESERVATION_TABLE_ASSIGNED",
-                table.getTenBan() + " đã được xếp cho khách đặt bàn",
+                effectiveTableName(table) + " đã được xếp cho khách đặt bàn",
                 toResponse(saved),
-                List.of(table.getMaBan())
+                assignedTables.stream().map(DiningTable::getMaBan).toList()
         );
         return toResponse(saved);
     }
@@ -540,6 +575,85 @@ public class ReservationService {
                 saved
         );
         return toResponse(saved);
+    }
+
+    /**
+     * Tự động kết thúc các lịch đã quá giờ giữ chỗ. Yêu cầu chưa được xác nhận
+     * chuyển sang HET_HAN; lịch đã xác nhận nhưng khách chưa check-in chuyển
+     * sang KHONG_DEN.
+     */
+    @Transactional
+    public int expireOverdueReservations() {
+        LocalDateTime deadline = LocalDateTime.now().minusMinutes(noShowGraceMinutes());
+        int changed = 0;
+
+        List<TableReservation> pending = reservationRepository.findOverdueByStatusForUpdate(PENDING, deadline);
+        for (TableReservation reservation : pending) {
+            if (!PENDING.equals(normalizeStatus(reservation.getTrangThai()))) {
+                continue;
+            }
+            reservation.setTrangThai(EXPIRED);
+            reservation.setLyDoHuyTuChoi("Yêu cầu chưa được xác nhận trước khi hết thời gian giữ chỗ");
+            cancelPreorderIfNotSent(reservation, "Yêu cầu đặt bàn đã hết hạn");
+            TableReservation saved = reservationRepository.saveAndFlush(reservation);
+                systemActivityService.record(
+                    "RESERVATION_EXPIRED",
+                    "Yêu cầu đặt bàn " + saved.getMaTraCuu() + " đã tự động hết hạn",
+                    saved.getMaDatBan()
+            );
+            realtimeNotificationService.notifyReservationChanged(
+                    "RESERVATION_EXPIRED",
+                    "Yêu cầu đặt bàn đã hết hạn",
+                    saved
+            );
+            changed++;
+        }
+
+        List<TableReservation> confirmed = reservationRepository.findOverdueByStatusForUpdate(CONFIRMED, deadline);
+        for (TableReservation reservation : confirmed) {
+            if (!CONFIRMED.equals(normalizeStatus(reservation.getTrangThai()))) {
+                continue;
+            }
+            reservation.setTrangThai(NO_SHOW);
+            reservation.setLyDoHuyTuChoi("Khách không đến sau thời gian giữ bàn");
+            cancelPreorderIfNotSent(reservation, "Khách không đến sau thời gian giữ bàn");
+            TableReservation saved = reservationRepository.saveAndFlush(reservation);
+                systemActivityService.record(
+                    "RESERVATION_NO_SHOW_AUTO",
+                    "Lịch đặt bàn " + saved.getMaTraCuu() + " tự động chuyển sang không đến",
+                    saved.getMaDatBan()
+            );
+            realtimeNotificationService.notifyReservationChanged(
+                    "RESERVATION_NO_SHOW",
+                    "Khách đặt bàn không đến",
+                    saved
+            );
+            changed++;
+        }
+        return changed;
+    }
+
+    @Transactional(readOnly = true)
+    public void ensureTableGroupCanBeUnmerged(List<DiningTable> tables) {
+        if (tables == null || tables.isEmpty()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        for (DiningTable table : tables) {
+            if (table == null || table.getMaBan() == null) {
+                continue;
+            }
+            if (reservationRepository.countFutureOrActiveForTable(
+                    table.getMaBan(),
+                    now,
+                    Set.of(PENDING, CONFIRMED, ARRIVED, SEATED)
+            ) > 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Nhóm bàn đang được dùng cho một lịch đặt bàn hiện tại hoặc sắp tới"
+                );
+            }
+        }
     }
 
     @Transactional
@@ -706,55 +820,94 @@ public class ReservationService {
         reservation.setHoTenKhach(normalizeRequired(request.hoTenKhach(), "Họ tên khách không được để trống"));
         reservation.setSoDienThoai(normalizePhone(request.soDienThoai()));
         LocalDateTime arrival = request.ngayGioDen();
-        if (arrival == null || !arrival.isAfter(LocalDateTime.now())) {
+        LocalDateTime now = LocalDateTime.now();
+        if (arrival == null || !arrival.isAfter(now)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ngày giờ đến phải ở tương lai");
         }
+
         int duration = normalizeDuration(request.thoiLuongPhut());
+        LocalDateTime expectedEnd = arrival.plusMinutes(duration);
+        if (!ReservationPolicyValidator.isWithinAdvanceWindow(
+                now,
+                arrival,
+                minimumAdvanceMinutes(),
+                maximumAdvanceDays()
+        )) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Lịch đặt bàn phải được tạo trước ít nhất " + minimumAdvanceMinutes()
+                            + " phút và không quá " + maximumAdvanceDays() + " ngày"
+            );
+        }
+        if (!ReservationPolicyValidator.isWithinOpeningHours(
+                arrival,
+                expectedEnd,
+                restaurantInfoProperties.getOpeningHours()
+        )) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Khung giờ đặt bàn phải nằm trong giờ phục vụ của nhà hàng: "
+                            + restaurantInfoProperties.getOpeningHours()
+            );
+        }
+
         reservation.setNgayGioDen(arrival);
         reservation.setThoiLuongPhut(duration);
-        reservation.setThoiGianKetThucDuKien(arrival.plusMinutes(duration));
+        reservation.setThoiGianKetThucDuKien(expectedEnd);
         reservation.setSoLuongKhach(request.soLuongKhach());
         reservation.setKhuVucMongMuon(resolvePreferredArea(request.khuVucMongMuon()));
         reservation.setGhiChu(trimToNull(request.ghiChu()));
+        ensureNoCustomerOverlap(reservation);
     }
 
     private void validateTableForReservation(DiningTable table, TableReservation reservation) {
-        if (table.getSucChua() == null || table.getSucChua() < reservation.getSoLuongKhach()) {
+        if (!isReservationSelectableTable(table)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    table.getTenBan() + " không đủ sức chứa cho " + reservation.getSoLuongKhach() + " khách"
+                    table.getTenBan() + " là bàn phụ của một nhóm ghép. Vui lòng chọn bàn chính của nhóm."
             );
         }
-        if (Set.of("BAO_TRI", "DANG_DON_DEP").contains(normalizeStatus(table.getTrangThai()))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, table.getTenBan() + " hiện không sẵn sàng");
+        if (effectiveCapacity(table) < reservation.getSoLuongKhach()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    effectiveTableName(table) + " không đủ sức chứa cho " + reservation.getSoLuongKhach() + " khách"
+            );
+        }
+        if (!isReservationTableStructureReady(table)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, effectiveTableName(table) + " hiện không sẵn sàng");
         }
     }
 
     private void validateActualTable(DiningTable table, TableReservation reservation) {
         validateTableForReservation(table, reservation);
-        if (!"TRONG".equals(normalizeStatus(table.getTrangThai()))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, table.getTenBan() + " không ở trạng thái trống");
-        }
-        if (StringUtils.hasText(table.getMaNhomBan()) || table.getMaBanChinh() != null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, table.getTenBan() + " đang thuộc nhóm ghép bàn");
-        }
-        if (!orderRepository.findOpenOrders(
-                table.getMaBan(), OPEN_ORDER_STATUSES, PageRequest.of(0, 1)
-        ).isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, table.getTenBan() + " đang có đơn phục vụ");
+        for (DiningTable member : reservationTableMembers(table)) {
+            if (!"TRONG".equals(normalizeStatus(member.getTrangThai()))) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        effectiveTableName(table) + " chưa hoàn toàn ở trạng thái trống"
+                );
+            }
+            if (!orderRepository.findOpenOrders(
+                    member.getMaBan(), OPEN_ORDER_STATUSES, PageRequest.of(0, 1)
+            ).isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        member.getTenBan() + " đang có đơn phục vụ"
+                );
+            }
         }
     }
 
     private void ensureNoOverlap(DiningTable table, TableReservation reservation) {
-        if (hasOverlap(
-                table.getMaBan(),
+        if (hasOverlapForTableOrGroup(
+                table,
                 reservation.getNgayGioDen(),
                 reservation.getThoiGianKetThucDuKien(),
                 reservation.getMaDatBan() == null ? 0 : reservation.getMaDatBan()
         )) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    table.getTenBan() + " đã có lịch đặt trùng khung giờ"
+                    effectiveTableName(table) + " đã có lịch đặt trùng hoặc chưa đủ thời gian chuẩn bị bàn"
             );
         }
     }
@@ -765,11 +918,101 @@ public class ReservationService {
                                Integer excludeId) {
         return reservationRepository.countOverlappingForTable(
                 tableId,
-                start,
-                end,
+                ReservationPolicyValidator.bufferedStart(start, tablePreparationMinutes()),
+                ReservationPolicyValidator.bufferedEnd(end, tablePreparationMinutes()),
                 OVERLAP_STATUSES,
                 excludeId == null ? 0 : excludeId
         ) > 0;
+    }
+
+    private void ensureNoCustomerOverlap(TableReservation reservation) {
+        if (!StringUtils.hasText(reservation.getSoDienThoai())
+                || reservation.getNgayGioDen() == null
+                || reservation.getThoiGianKetThucDuKien() == null) {
+            return;
+        }
+        long conflicts = reservationRepository.countOverlappingForCustomer(
+                reservation.getSoDienThoai(),
+                reservation.getNgayGioDen(),
+                reservation.getThoiGianKetThucDuKien(),
+                CUSTOMER_ACTIVE_STATUSES,
+                reservation.getMaDatBan() == null ? 0 : reservation.getMaDatBan()
+        );
+        if (conflicts > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Số điện thoại này đã có một lịch đặt bàn đang hoạt động trong cùng khung giờ"
+            );
+        }
+    }
+
+
+    private boolean isReservationSelectableTable(DiningTable table) {
+        if (table == null || table.getMaBan() == null) {
+            return false;
+        }
+        if (!StringUtils.hasText(table.getMaNhomBan())) {
+            return true;
+        }
+        return table.getMaBanChinh() != null && table.getMaBan().equals(table.getMaBanChinh());
+    }
+
+    private List<DiningTable> reservationTableMembers(DiningTable table) {
+        if (table == null) {
+            return List.of();
+        }
+        if (!StringUtils.hasText(table.getMaNhomBan())) {
+            return List.of(table);
+        }
+        List<DiningTable> members = diningTableRepository.findByMaNhomBanOrderByMaBanAsc(table.getMaNhomBan());
+        return members.isEmpty() ? List.of(table) : members;
+    }
+
+    private int effectiveCapacity(DiningTable table) {
+        return reservationTableMembers(table).stream()
+                .map(DiningTable::getSucChua)
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(Integer::intValue)
+                .sum();
+    }
+
+    private String effectiveTableName(DiningTable table) {
+        List<DiningTable> members = reservationTableMembers(table);
+        if (members.size() <= 1) {
+            return table == null ? "Bàn" : table.getTenBan();
+        }
+        return members.stream()
+                .map(DiningTable::getTenBan)
+                .filter(StringUtils::hasText)
+                .reduce((left, right) -> left + " + " + right)
+                .orElse(table.getTenBan());
+    }
+
+    private String effectiveTableStatus(DiningTable table) {
+        List<DiningTable> members = reservationTableMembers(table);
+        boolean allEmpty = members.stream().allMatch(member -> "TRONG".equals(normalizeStatus(member.getTrangThai())));
+        if (allEmpty) {
+            return "TRONG";
+        }
+        return members.stream()
+                .map(DiningTable::getTrangThai)
+                .filter(StringUtils::hasText)
+                .filter(status -> !"TRONG".equals(normalizeStatus(status)))
+                .findFirst()
+                .orElse(table.getTrangThai());
+    }
+
+    private boolean isReservationTableStructureReady(DiningTable table) {
+        return reservationTableMembers(table).stream()
+                .noneMatch(member -> Set.of("BAO_TRI", "DANG_DON_DEP").contains(normalizeStatus(member.getTrangThai())));
+    }
+
+    private boolean hasOverlapForTableOrGroup(DiningTable table,
+                                              LocalDateTime start,
+                                              LocalDateTime end,
+                                              Integer excludeId) {
+        return reservationTableMembers(table).stream()
+                .anyMatch(member -> hasOverlap(member.getMaBan(), start, end, excludeId));
     }
 
     private void releaseAssignedTableIfUnused(TableReservation reservation) {
@@ -777,20 +1020,33 @@ public class ReservationService {
         if (table == null || table.getMaBan() == null || reservation.getDonHang() != null) {
             return;
         }
-        DiningTable locked = lockTable(table.getMaBan());
-        if (orderRepository.findOpenOrders(
-                locked.getMaBan(), OPEN_ORDER_STATUSES, PageRequest.of(0, 1)
-        ).isEmpty()) {
-            locked.setTrangThai("TRONG");
-            diningTableRepository.save(locked);
-            realtimeNotificationService.notifyTableArrangementChanged(
-                    "RESERVATION_TABLE_RELEASED",
-                    locked.getTenBan() + " đã được giải phóng",
-                    toResponse(reservation),
-                    List.of(locked.getMaBan())
-            );
+
+        List<DiningTable> lockedTables;
+        if (StringUtils.hasText(table.getMaNhomBan())) {
+            lockedTables = diningTableRepository.findByMaNhomBanForUpdate(table.getMaNhomBan());
+        } else {
+            lockedTables = List.of(lockTable(table.getMaBan()));
         }
+        if (lockedTables.isEmpty()) {
+            return;
+        }
+        boolean hasOpenOrder = lockedTables.stream().anyMatch(member -> !orderRepository.findOpenOrders(
+                member.getMaBan(), OPEN_ORDER_STATUSES, PageRequest.of(0, 1)
+        ).isEmpty());
+        if (hasOpenOrder) {
+            return;
+        }
+
+        lockedTables.forEach(member -> member.setTrangThai("TRONG"));
+        diningTableRepository.saveAll(lockedTables);
+        realtimeNotificationService.notifyTableArrangementChanged(
+                "RESERVATION_TABLE_RELEASED",
+                effectiveTableName(table) + " đã được giải phóng",
+                toResponse(reservation),
+                lockedTables.stream().map(DiningTable::getMaBan).toList()
+        );
     }
+
 
     private TableReservation findById(Integer id) {
         if (id == null) {
@@ -908,7 +1164,7 @@ public class ReservationService {
     }
 
     private void validateKnownStatus(String status) {
-        if (!Set.of(PENDING, CONFIRMED, ARRIVED, SEATED, COMPLETED, CANCELLED, REJECTED, NO_SHOW).contains(status)) {
+        if (!Set.of(PENDING, CONFIRMED, ARRIVED, SEATED, COMPLETED, CANCELLED, REJECTED, NO_SHOW, EXPIRED).contains(status)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái đặt bàn không hợp lệ: " + status);
         }
     }
@@ -929,6 +1185,18 @@ public class ReservationService {
 
     private int noShowGraceMinutes() {
         return reservationPolicyProperties.getNoShowGraceMinutes();
+    }
+
+    private int checkInEarlyMinutes() {
+        return reservationPolicyProperties.getCheckInEarlyMinutes();
+    }
+
+    private int minimumAdvanceMinutes() {
+        return reservationPolicyProperties.getMinimumAdvanceMinutes();
+    }
+
+    private int maximumAdvanceDays() {
+        return reservationPolicyProperties.getMaximumAdvanceDays();
     }
 
     private int normalizeDuration(Integer value) {
@@ -964,9 +1232,9 @@ public class ReservationService {
                 reservation.getSoLuongKhach(),
                 reservation.getKhuVucMongMuon(),
                 expected == null ? null : expected.getMaBan(),
-                expected == null ? null : expected.getTenBan(),
+                expected == null ? null : effectiveTableName(expected),
                 actual == null ? null : actual.getMaBan(),
-                actual == null ? null : actual.getTenBan(),
+                actual == null ? null : effectiveTableName(actual),
                 reservation.getDonHang() == null ? null : reservation.getDonHang().getMaDonHang(),
                 reservation.getGhiChu(),
                 reservation.getTrangThai(),

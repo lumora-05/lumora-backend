@@ -19,5 +19,11 @@ public class PublicSystemSettingResponse {
     private String menuUrl;
     private String logoUrl;
     private String bannerUrl;
+    private Integer reservationDefaultDurationMinutes;
+    private Integer reservationPreparationMinutes;
+    private Integer reservationNoShowGraceMinutes;
+    private Integer reservationCheckInEarlyMinutes;
+    private Integer reservationMinimumAdvanceMinutes;
+    private Integer reservationMaximumAdvanceDays;
     private LocalDateTime updatedAt;
 }

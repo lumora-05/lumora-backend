@@ -22,6 +22,9 @@ public class SystemSettingService {
     private static final int DEFAULT_RESERVATION_DURATION_MINUTES = 120;
     private static final int DEFAULT_RESERVATION_PREPARATION_MINUTES = 30;
     private static final int DEFAULT_RESERVATION_NO_SHOW_GRACE_MINUTES = 15;
+    private static final int DEFAULT_RESERVATION_CHECK_IN_EARLY_MINUTES = 30;
+    private static final int DEFAULT_RESERVATION_MINIMUM_ADVANCE_MINUTES = 30;
+    private static final int DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS = 60;
     private static final BigDecimal DEFAULT_LOYALTY_MONEY_PER_POINT = new BigDecimal("10000");
     private static final BigDecimal DEFAULT_LOYALTY_REDEEM_VALUE = new BigDecimal("1000");
     private static final int DEFAULT_LOYALTY_MINIMUM_REDEEM_POINTS = 20;
@@ -90,6 +93,15 @@ public class SystemSettingService {
         }
         if (request.getReservationNoShowGraceMinutes() != null) {
             setting.setReservationNoShowGraceMinutes(request.getReservationNoShowGraceMinutes());
+        }
+        if (request.getReservationCheckInEarlyMinutes() != null) {
+            setting.setReservationCheckInEarlyMinutes(request.getReservationCheckInEarlyMinutes());
+        }
+        if (request.getReservationMinimumAdvanceMinutes() != null) {
+            setting.setReservationMinimumAdvanceMinutes(request.getReservationMinimumAdvanceMinutes());
+        }
+        if (request.getReservationMaximumAdvanceDays() != null) {
+            setting.setReservationMaximumAdvanceDays(request.getReservationMaximumAdvanceDays());
         }
 
         if (request.getVietQrBankId() != null) {
@@ -262,6 +274,9 @@ public class SystemSettingService {
         setting.setReservationDefaultDurationMinutes(DEFAULT_RESERVATION_DURATION_MINUTES);
         setting.setReservationPreparationMinutes(DEFAULT_RESERVATION_PREPARATION_MINUTES);
         setting.setReservationNoShowGraceMinutes(DEFAULT_RESERVATION_NO_SHOW_GRACE_MINUTES);
+        setting.setReservationCheckInEarlyMinutes(DEFAULT_RESERVATION_CHECK_IN_EARLY_MINUTES);
+        setting.setReservationMinimumAdvanceMinutes(DEFAULT_RESERVATION_MINIMUM_ADVANCE_MINUTES);
+        setting.setReservationMaximumAdvanceDays(DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS);
 
         setting.setVietQrBankId(cleanOptional(vietQrProperties.getBankId()));
         setting.setVietQrBankName(cleanOptional(vietQrProperties.getBankName()));
@@ -301,6 +316,18 @@ public class SystemSettingService {
         }
         if (setting.getReservationNoShowGraceMinutes() == null) {
             setting.setReservationNoShowGraceMinutes(DEFAULT_RESERVATION_NO_SHOW_GRACE_MINUTES);
+            changed = true;
+        }
+        if (setting.getReservationCheckInEarlyMinutes() == null) {
+            setting.setReservationCheckInEarlyMinutes(DEFAULT_RESERVATION_CHECK_IN_EARLY_MINUTES);
+            changed = true;
+        }
+        if (setting.getReservationMinimumAdvanceMinutes() == null) {
+            setting.setReservationMinimumAdvanceMinutes(DEFAULT_RESERVATION_MINIMUM_ADVANCE_MINUTES);
+            changed = true;
+        }
+        if (setting.getReservationMaximumAdvanceDays() == null) {
+            setting.setReservationMaximumAdvanceDays(DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS);
             changed = true;
         }
 
@@ -393,6 +420,15 @@ public class SystemSettingService {
         reservationPolicyProperties.setNoShowGraceMinutes(
                 nonNegativeOrDefault(setting.getReservationNoShowGraceMinutes(), DEFAULT_RESERVATION_NO_SHOW_GRACE_MINUTES)
         );
+        reservationPolicyProperties.setCheckInEarlyMinutes(
+                nonNegativeOrDefault(setting.getReservationCheckInEarlyMinutes(), DEFAULT_RESERVATION_CHECK_IN_EARLY_MINUTES)
+        );
+        reservationPolicyProperties.setMinimumAdvanceMinutes(
+                nonNegativeOrDefault(setting.getReservationMinimumAdvanceMinutes(), DEFAULT_RESERVATION_MINIMUM_ADVANCE_MINUTES)
+        );
+        reservationPolicyProperties.setMaximumAdvanceDays(
+                positiveOrDefault(setting.getReservationMaximumAdvanceDays(), DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS)
+        );
 
         // Thanh toán VietQR
         vietQrProperties.setBankId(cleanOptional(setting.getVietQrBankId()));
@@ -442,6 +478,9 @@ public class SystemSettingService {
                 .reservationDefaultDurationMinutes(setting.getReservationDefaultDurationMinutes())
                 .reservationPreparationMinutes(setting.getReservationPreparationMinutes())
                 .reservationNoShowGraceMinutes(setting.getReservationNoShowGraceMinutes())
+                .reservationCheckInEarlyMinutes(setting.getReservationCheckInEarlyMinutes())
+                .reservationMinimumAdvanceMinutes(setting.getReservationMinimumAdvanceMinutes())
+                .reservationMaximumAdvanceDays(setting.getReservationMaximumAdvanceDays())
                 .vietQrBankId(setting.getVietQrBankId())
                 .vietQrBankName(setting.getVietQrBankName())
                 .vietQrAccountNo(setting.getVietQrAccountNo())
@@ -474,6 +513,12 @@ public class SystemSettingService {
                 .menuUrl(setting.getMenuUrl())
                 .logoUrl(setting.getLogoUrl())
                 .bannerUrl(setting.getBannerUrl())
+                .reservationDefaultDurationMinutes(setting.getReservationDefaultDurationMinutes())
+                .reservationPreparationMinutes(setting.getReservationPreparationMinutes())
+                .reservationNoShowGraceMinutes(setting.getReservationNoShowGraceMinutes())
+                .reservationCheckInEarlyMinutes(setting.getReservationCheckInEarlyMinutes())
+                .reservationMinimumAdvanceMinutes(setting.getReservationMinimumAdvanceMinutes())
+                .reservationMaximumAdvanceDays(setting.getReservationMaximumAdvanceDays())
                 .updatedAt(setting.getNgayCapNhat())
                 .build();
     }

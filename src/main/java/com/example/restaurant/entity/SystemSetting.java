@@ -64,6 +64,15 @@ public class SystemSetting {
     @Column(name = "reservation_no_show_grace_minutes")
     private Integer reservationNoShowGraceMinutes;
 
+    @Column(name = "reservation_check_in_early_minutes")
+    private Integer reservationCheckInEarlyMinutes;
+
+    @Column(name = "reservation_minimum_advance_minutes")
+    private Integer reservationMinimumAdvanceMinutes;
+
+    @Column(name = "reservation_maximum_advance_days")
+    private Integer reservationMaximumAdvanceDays;
+
     // Thanh toán VietQR
     @Column(name = "vietqr_bank_id", length = 30)
     private String vietQrBankId;

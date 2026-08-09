@@ -15,4 +15,7 @@ public class ReservationPolicyProperties {
     private int defaultDurationMinutes = 120;
     private int tablePreparationMinutes = 30;
     private int noShowGraceMinutes = 15;
+    private int checkInEarlyMinutes = 30;
+    private int minimumAdvanceMinutes = 30;
+    private int maximumAdvanceDays = 60;
 }
