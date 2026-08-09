@@ -27,6 +27,7 @@ import java.util.Set;
 
 @Service
 public class ReservationPreorderService {
+    private static final String RESERVATION_PENDING = "CHO_XAC_NHAN";
     private static final String RESERVATION_CONFIRMED = "DA_XAC_NHAN";
     private static final String RESERVATION_ARRIVED = "KHACH_DA_DEN";
     private static final String RESERVATION_SEATED = "DA_XEP_BAN";
@@ -83,7 +84,8 @@ public class ReservationPreorderService {
     }
 
     /**
-     * Khách chỉ được chọn món trước sau khi lịch đặt bàn đã được nhà hàng xác nhận.
+     * Khách được chọn món trước ngay từ khi yêu cầu đặt bàn còn CHO_XAC_NHAN.
+     * Thực đơn chỉ là pre-order gắn với lịch đặt, chưa tạo đơn và chưa chuyển xuống bếp.
      * Nếu khách sửa thực đơn đã duyệt, trạng thái quay lại CHO_XAC_NHAN.
      */
     @Transactional
@@ -403,10 +405,10 @@ public class ReservationPreorderService {
 
     private void ensureCustomerCanEdit(TableReservation reservation) {
         String reservationStatus = normalizeStatus(reservation.getTrangThai());
-        if (!RESERVATION_CONFIRMED.equals(reservationStatus)) {
+        if (!Set.of(RESERVATION_PENDING, RESERVATION_CONFIRMED).contains(reservationStatus)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Chỉ được chọn món trước sau khi lịch đặt bàn đã được xác nhận"
+                    "Chỉ được chọn món trước khi lịch đặt bàn đang chờ hoặc đã được xác nhận"
             );
         }
     }
