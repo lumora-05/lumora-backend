@@ -10,7 +10,10 @@ public record ReservationCreateRequest(
         String hoTenKhach,
 
         @NotBlank(message = "Số điện thoại không được để trống")
-        @Pattern(regexp = "^[0-9+ .()-]{8,20}$", message = "Số điện thoại không hợp lệ")
+        @Pattern(
+                regexp = "^0(?:3[2-9]|5[2689]|7[06-9]|8[1-9]|9[0-9])[0-9]{7}$",
+                message = "Số điện thoại phải là số di động Việt Nam hợp lệ gồm 10 chữ số"
+        )
         String soDienThoai,
 
         @NotNull(message = "Ngày giờ đến không được để trống")

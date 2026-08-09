@@ -1314,9 +1314,12 @@ public class ReservationService {
 
     private String normalizePhone(String value) {
         String phone = normalizeRequired(value, "Số điện thoại không được để trống")
-                .replaceAll("[^0-9+]", "");
-        if (phone.length() < 8 || phone.length() > 20) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Số điện thoại không hợp lệ");
+                .replaceAll("\\D", "");
+        if (!phone.matches("^0(?:3[2-9]|5[2689]|7[06-9]|8[1-9]|9[0-9])[0-9]{7}$")) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Số điện thoại phải là số di động Việt Nam hợp lệ gồm 10 chữ số"
+            );
         }
         return phone;
     }
