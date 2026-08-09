@@ -1,44 +1,62 @@
 # API đặt món giao tận nơi
 
-## Phạm vi nghiệp vụ
+## Luồng nghiệp vụ hiện tại
 
-- Khách đặt trực tiếp trên website LUMORA.
-- Không thêm vai trò `SHIPPER`.
-- Thu ngân hoặc admin xác nhận đơn và cập nhật kết quả giao; không nhập thủ công tài xế.
-- Bếp vẫn xử lý từng suất món riêng.
-- Khi toàn bộ suất món hợp lệ hoàn thành, backend gọi dịch vụ vận chuyển mô phỏng để nhận mã vận đơn và thông tin tài xế.
-- Đơn giao hàng không chiếm bàn và không làm thay đổi trạng thái bàn ăn.
+1. Khách nhập địa chỉ, backend xác định khu vực/phí giao và xác thực số điện thoại bằng OTP demo.
+2. Khách gửi đơn ở trạng thái `CHO_XAC_NHAN`.
+3. Thu ngân/admin xác nhận sau khi backend kiểm tra khả năng đáp ứng nguyên liệu.
+4. COD chuyển xuống bếp ngay. VietQR chuyển sang `CHO_THANH_TOAN`; khách chỉ được tạo QR sau bước này. Khi thu ngân xác nhận tiền, backend kiểm tra lại nguyên liệu rồi mới chuyển bếp.
+5. Khi tiến độ bếp đạt ngưỡng cấu hình (mặc định 70%), backend có thể điều phối sớm GrabExpress (Demo). Chỉ khi toàn bộ món hoàn tất mới cho bàn giao.
+6. Sau bàn giao, kết quả giao được nhận từ webhook đối tác. Với bản demo có API mô phỏng webhook dành cho CASHIER/ADMIN.
+7. Đối tác báo giao thành công -> `CHO_DOI_SOAT`; thu ngân đối soát và tạo hóa đơn -> `HOAN_THANH`.
+8. Nếu tiền VietQR đã thu nhưng tổng tiền giảm hoặc đơn bị hủy, hệ thống chuyển `CHO_HOAN_TIEN`; thu ngân phải ghi nhận giao dịch hoàn tiền. Hoàn hết đơn bị hủy -> `DA_HOAN_TIEN`.
+9. VietQR không thanh toán trong thời hạn cấu hình (mặc định 15 phút) tự hủy; đơn `CHO_XAC_NHAN` quá lâu được cảnh báo cho nhân viên.
+
+Không thêm vai trò `SHIPPER`; `DeliveryProviderService` vẫn là cổng tích hợp vận chuyển.
 
 ## Trạng thái giao hàng
 
 | Trạng thái | Ý nghĩa |
 |---|---|
-| `CHO_XAC_NHAN` | Khách vừa gửi đơn, nhà hàng chưa xác nhận |
-| `DANG_CHUAN_BI` | Đơn đã xác nhận và đang được bếp chế biến |
-| `CHO_TAI_XE_NHAN` | Tất cả món hoàn thành; dịch vụ vận chuyển đã cấp mã vận đơn và điều phối tài xế |
-| `DANG_GIAO` | Thu ngân đã bàn giao món cho tài xế được đơn vị vận chuyển điều phối |
-| `HOAN_THANH` | Giao thành công và đã tạo hóa đơn |
-| `GIAO_THAT_BAI` | Lần giao hiện tại không thành công |
-| `DA_HUY` | Khách hủy hoặc nhà hàng từ chối trước khi xác nhận |
+| `CHO_XAC_NHAN` | Khách vừa gửi đơn |
+| `CHO_THANH_TOAN` | Nhà hàng đã nhận đơn VietQR, đang chờ khách thanh toán |
+| `DANG_CHUAN_BI` | Đơn đã xuống bếp |
+| `CHO_TAI_XE_NHAN` | Toàn bộ món sẵn sàng, đã có tài xế/mã vận đơn |
+| `DANG_GIAO` | Đã bàn giao cho tài xế |
+| `CHO_DOI_SOAT` | Đối tác báo giao thành công, chờ thu ngân đối soát |
+| `HOAN_THANH` | Đã đối soát và tạo hóa đơn |
+| `GIAO_THAT_BAI` | Đối tác báo giao thất bại |
+| `DA_HUY` | Đơn bị hủy/từ chối/hết hạn |
 
-## Phí giao hàng mặc định
+Trạng thái thanh toán gồm `CHO_THANH_TOAN`, `DA_THANH_TOAN`, `CHO_HOAN_TIEN`, `DA_HOAN_TIEN`, `HET_HAN`, `DA_HUY`.
 
-- `NOI_THANH`: 15.000 đồng.
-- `LAN_CAN`: 25.000 đồng.
+## API công khai
 
-Có thể thay đổi bằng biến môi trường:
+### Tính phí do backend quyết định
 
-```text
-DELIVERY_INNER_AREA_FEE
-DELIVERY_NEARBY_AREA_FEE
-DELIVERY_SHIPPING_CODE_PREFIX (giữ để tương thích cấu hình cũ, không còn dùng để sinh mã mới)
-DELIVERY_MOCK_PROVIDER_NAME
-DELIVERY_MOCK_WAYBILL_PREFIX
-DELIVERY_MAX_UNITS_PER_ITEM
-DELIVERY_MAX_UNITS_PER_ORDER
+```http
+POST /api/customer/delivery/quote
 ```
 
-## API công khai cho khách
+```json
+{
+  "tinhThanh": "Đà Nẵng",
+  "quanHuyen": "Thanh Khê",
+  "phuongXa": "Chính Gián",
+  "diaChiChiTiet": "123 Nguyễn Văn Linh"
+}
+```
+
+Frontend không gửi `phiGiaoHang` hoặc `khuVucGiaoHang` khi tạo đơn.
+
+### OTP số điện thoại
+
+```http
+POST /api/customer/delivery/phone-otp/request
+POST /api/customer/delivery/phone-otp/verify
+```
+
+Bản đồ án mặc định trả `demoOtp` để trình diễn. Khi triển khai thật, thay phần phát OTP bằng adapter SMS và đặt `DELIVERY_EXPOSE_DEMO_OTP=false`.
 
 ### Tạo đơn
 
@@ -51,152 +69,93 @@ POST /api/customer/delivery/orders
   "clientRequestId": "2acb522d-5ce8-4722-bb97-97ca4dd8ec61",
   "tenNguoiNhan": "Nguyễn Văn A",
   "soDienThoaiNhan": "0912345678",
-  "diaChiGiaoHang": "123 Nguyễn Văn Linh, Đà Nẵng",
-  "khuVucGiaoHang": "NOI_THANH",
+  "diaChiChiTiet": "123 Nguyễn Văn Linh",
+  "phuongXa": "Chính Gián",
+  "quanHuyen": "Thanh Khê",
+  "tinhThanh": "Đà Nẵng",
   "ghiChuGiaoHang": "Gọi trước khi đến",
-  "phuongThucThanhToan": "COD",
-  "ghiChuDonHang": "Giao sau 18 giờ",
-  "items": [
-    {
-      "maMonAn": 5,
-      "soLuong": 2,
-      "ghiChu": "Không cay"
-    }
-  ]
+  "phuongThucThanhToan": "VIETQR",
+  "phoneVerificationToken": "token-sau-khi-verify-otp",
+  "items": [{ "maMonAn": 5, "soLuong": 2, "ghiChu": "Không cay" }]
 }
 ```
 
-`clientRequestId` phải do frontend tạo một lần cho mỗi lần đặt hàng. Gửi lại cùng mã và cùng số điện thoại sẽ trả về đơn đã tạo, tránh nhân đôi khi khách bấm nhiều lần.
-
-### Tra cứu đơn
+### Tra cứu, VietQR và hủy
 
 ```http
-GET /api/customer/delivery/orders/{trackingToken}
-```
-
-### Lấy VietQR
-
-```http
-GET /api/customer/delivery/orders/{trackingToken}/vietqr
-```
-
-Chỉ dùng khi đơn chọn `VIETQR`. API này không tự xác nhận đã nhận tiền.
-
-### Khách hủy đơn
-
-```http
+GET  /api/customer/delivery/orders/{trackingToken}
+GET  /api/customer/delivery/orders/{trackingToken}/vietqr
 POST /api/customer/delivery/orders/{trackingToken}/cancel
 ```
 
-```json
-{
-  "lyDo": "Tôi nhập sai địa chỉ"
-}
-```
+VietQR chỉ tạo khi đơn ở `CHO_THANH_TOAN`. Khách được tự hủy khi `CHO_XAC_NHAN`, hoặc khi `CHO_THANH_TOAN` nhưng chưa ghi nhận tiền.
 
-Khách chỉ được hủy khi đơn còn `CHO_XAC_NHAN`.
-
-## API dành cho thu ngân/admin
-
-### Danh sách và chi tiết
-
-```http
-GET /api/delivery-orders
-GET /api/delivery-orders?deliveryStatus=CHO_XAC_NHAN
-GET /api/delivery-orders/{orderId}
-```
-
-### Xác nhận VietQR
-
-```http
-POST /api/delivery-orders/{orderId}/confirm-vietqr
-```
-
-```json
-{
-  "maGiaoDich": "MB202608060001",
-  "ghiChu": "Đã kiểm tra tài khoản"
-}
-```
-
-### Xác nhận hoặc từ chối đơn
+## API CASHIER/ADMIN
 
 ```http
 POST /api/delivery-orders/{orderId}/confirm
 POST /api/delivery-orders/{orderId}/reject
-```
-
-Khi từ chối:
-
-```json
-{
-  "lyDo": "Ngoài khu vực giao hàng"
-}
-```
-
-Đơn VietQR phải được thu ngân xác nhận đã nhận tiền trước khi xác nhận chuyển xuống bếp.
-
-### Bàn giao cho tài xế đã được điều phối
-
-Khi bếp hoàn thành toàn bộ món, backend tự gọi `DeliveryProviderService`. Bản demo dùng
-`MockDeliveryProviderService` để mô phỏng API đối tác và tự nhận:
-
-- mã vận đơn đối tác, ví dụ `GRAB-DEMO-00000125-ABC123DEF4`;
-- tên đơn vị vận chuyển;
-- tên tài xế;
-- số điện thoại tài xế.
-
-Thu ngân không nhập các thông tin này. Khi tài xế đến nhận món, thu ngân chỉ xác nhận bàn giao:
-
-```http
+POST /api/delivery-orders/{orderId}/confirm-vietqr
+POST /api/delivery-orders/{orderId}/confirm-refund
 POST /api/delivery-orders/{orderId}/handover
-```
-
-```json
-{
-  "ghiChuBanGiao": "Đã bàn giao đủ 3 túi"
-}
-```
-
-Các trường `donViVanChuyen`, `tenNguoiGiao`, `soDienThoaiNguoiGiao` trong request cũ vẫn được backend chấp nhận để tương thích frontend cũ nhưng bị bỏ qua, không thể ghi đè thông tin tài xế do đối tác điều phối.
-
-Chỉ thực hiện được khi trạng thái là `CHO_TAI_XE_NHAN` và đơn đã có đầy đủ thông tin điều phối.
-
-### Giao thành công, thất bại và giao lại
-
-```http
 POST /api/delivery-orders/{orderId}/complete
-POST /api/delivery-orders/{orderId}/fail
 POST /api/delivery-orders/{orderId}/retry
 ```
 
-Khi thất bại:
+`confirm` không yêu cầu VietQR đã trả trước. Với VietQR, nó chỉ nhận đơn và mở bước thanh toán. `confirm-vietqr` mới chuyển đơn xuống bếp.
+
+Admin có thể dùng API hủy món hiện có `POST /api/orders/items/{itemId}/cancel` cho đơn giao hàng trước khi bàn giao. Nếu VietQR đã thu tiền, backend tự tính khoản chênh lệch cần hoàn.
+
+## Webhook vận chuyển
+
+Webhook thật/mô phỏng từ đối tác:
+
+```http
+POST /api/delivery-provider/webhook
+X-Delivery-Webhook-Token: <DELIVERY_PROVIDER_WEBHOOK_TOKEN>
+```
 
 ```json
 {
-  "lyDo": "Không liên lạc được với người nhận"
+  "maVanDon": "GRAB-DEMO-...",
+  "trangThai": "GIAO_THANH_CONG",
+  "lyDo": null,
+  "eventId": "provider-event-001"
 }
 ```
 
-- `complete` tạo hóa đơn và chuyển đơn hàng sang `DA_THANH_TOAN`.
-- Với COD, tiền được ghi nhận khi giao thành công.
-- Với VietQR, hệ thống yêu cầu trạng thái thanh toán đã được thu ngân xác nhận.
-- `retry` tự gửi lại yêu cầu đến dịch vụ vận chuyển mô phỏng, nhận mã vận đơn/tài xế mới và đưa đơn về `CHO_TAI_XE_NHAN`.
+Endpoint public chỉ chấp nhận token cấu hình bằng biến môi trường. Mặc định token để trống nên webhook ngoài bị khóa. Trong giao diện demo, CASHIER/ADMIN có thể dùng:
 
-## Dịch vụ vận chuyển mô phỏng
-
-- Không thêm vai trò `SHIPPER`.
-- Mô phỏng GrabExpress; không gọi API GrabExpress/Grab thật.
-- `DeliveryProviderService` là cổng tích hợp; khi có API thật chỉ thay implementation.
-- Bản demo hiện dùng `MockDeliveryProviderService` với tên hiển thị `GrabExpress (Demo)` và mã vận đơn dạng `GRAB-DEMO-...`.
-- Không cần thêm cột database so với bản giao hàng trước vì tái sử dụng `ma_van_chuyen`, `don_vi_van_chuyen`, `ten_nguoi_giao`, `so_dien_thoai_nguoi_giao`.
-
-## Nâng cấp cơ sở dữ liệu
-
-Chạy file:
-
-```text
-database/delivery_order_upgrade.sql
+```http
+POST /api/delivery-orders/{orderId}/simulate-provider-result
 ```
 
-Nếu đang dùng `spring.jpa.hibernate.ddl-auto=update`, Hibernate có thể tạo cột/bảng, nhưng vẫn nên chạy SQL trên môi trường production để bảo đảm đầy đủ chỉ mục và ràng buộc.
+để mô phỏng cùng luồng webhook mà không cần vai trò shipper.
+
+## Cấu hình
+
+Các biến chính:
+
+```text
+DELIVERY_INNER_AREA_FEE=15000
+DELIVERY_NEARBY_AREA_FEE=25000
+DELIVERY_SUPPORTED_CITY=Đà Nẵng
+DELIVERY_INNER_DISTRICTS=Thanh Khê,Hải Châu
+DELIVERY_NEARBY_DISTRICTS=Sơn Trà,Ngũ Hành Sơn,Cẩm Lệ,Liên Chiểu,Hòa Vang
+DELIVERY_PAYMENT_TIMEOUT_MINUTES=15
+DELIVERY_CONFIRMATION_WARNING_MINUTES=10
+DELIVERY_DRIVER_ASSIGNMENT_PROGRESS_PERCENT=70
+DELIVERY_PROVIDER_WEBHOOK_TOKEN=<secret>
+DELIVERY_OTP_EXPIRY_MINUTES=5
+DELIVERY_PHONE_VERIFICATION_MINUTES=20
+DELIVERY_REQUIRE_PHONE_VERIFICATION=true
+DELIVERY_EXPOSE_DEMO_OTP=true
+```
+
+Cơ sở dữ liệu dùng `spring.jpa.hibernate.ddl-auto=update`; file `database/delivery_order_upgrade.sql` cũng đã được cập nhật để có thể nâng cấp PostgreSQL/Neon chủ động.
+
+## Google Maps / tính phí theo quãng đường
+
+Luồng giao hàng hỗ trợ Google Places + Routes API. Khi frontend gửi `googlePlaceId`, backend gọi Routes API để tính lại quãng đường từ LUMORA tới khách và tự quyết định phí; frontend không được gửi số tiền phí giao hàng.
+
+Cấu hình chi tiết xem `GOOGLE_MAPS_DELIVERY_SETUP.md`. Nếu chưa có `GOOGLE_MAPS_SERVER_API_KEY`, backend giữ cơ chế quận/huyện cũ làm fallback để không làm gián đoạn demo.

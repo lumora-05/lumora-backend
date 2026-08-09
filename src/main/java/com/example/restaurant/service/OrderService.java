@@ -65,6 +65,7 @@ public class OrderService {
             "SAN_SANG_THANH_TOAN",
             "CHO_BAN_GIAO",
             "CHO_TAI_XE_NHAN",
+            "CHO_DOI_SOAT",
             "DANG_GIAO",
             "GIAO_THAT_BAI",
             "DA_THANH_TOAN",
@@ -726,7 +727,7 @@ public class OrderService {
             ensureWaiterCanAccessOrder(actor, order);
         }
 
-        validateOrderAllowsItemCancellation(order);
+        validateOrderAllowsItemCancellation(order, admin);
         String currentItemStatus = normalizeStatus(item.getTrangThaiMon());
         if ("DA_HUY".equals(currentItemStatus)) {
             return item;
@@ -1053,7 +1054,7 @@ public class OrderService {
                     "Đơn hàng chưa được nhân viên phục vụ xác nhận"
             );
         }
-        if (Set.of("CHO_TAI_XE_NHAN", "CHO_BAN_GIAO", "DANG_GIAO", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY").contains(orderStatus)) {
+        if (Set.of("CHO_TAI_XE_NHAN", "CHO_BAN_GIAO", "DANG_GIAO", "CHO_DOI_SOAT", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY").contains(orderStatus)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng đã bàn giao hoặc kết thúc, không thể cập nhật món");
         }
 
@@ -1129,13 +1130,26 @@ public class OrderService {
     }
 
     private void validateOrderAllowsItemCancellation(Order order) {
-        if (order != null && order.isDeliveryOrder()) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Đơn giao hàng chỉ được hủy toàn bộ khi còn chờ xác nhận; không hủy lẻ món sau khi chuyển xuống bếp"
-            );
-        }
+        validateOrderAllowsItemCancellation(order, false);
+    }
+
+    private void validateOrderAllowsItemCancellation(Order order, boolean admin) {
         String orderStatus = normalizeStatus(order.getTrangThai());
+        if (order != null && order.isDeliveryOrder()) {
+            if (!admin) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Chỉ quản trị viên được hủy lẻ món của đơn giao hàng khi đơn chưa bàn giao cho tài xế"
+                );
+            }
+            if (!Set.of("CHO_THANH_TOAN", "DA_XAC_NHAN", "DANG_CHUAN_BI", "DANG_CHE_BIEN").contains(orderStatus)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Đơn giao hàng ở trạng thái " + orderStatus + ", không thể hủy lẻ món"
+                );
+            }
+            return;
+        }
         if (Set.of(
                 "DA_PHUC_VU",
                 "CHO_THANH_TOAN",
@@ -1381,7 +1395,7 @@ public class OrderService {
             return;
         }
         String current = normalizeStatus(order.getTrangThai());
-        if (Set.of("CHO_XAC_NHAN", "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "CHO_TAI_XE_NHAN", "CHO_BAN_GIAO", "DANG_GIAO", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY")
+        if (Set.of("CHO_XAC_NHAN", "CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "CHO_TAI_XE_NHAN", "CHO_BAN_GIAO", "DANG_GIAO", "CHO_DOI_SOAT", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY")
                 .contains(current)
                 || ("DA_PHUC_VU".equals(current) && !allowReopenFromServed)) {
             return;

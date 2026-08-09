@@ -1,6 +1,7 @@
 -- Nâng cấp chức năng khách đặt món giao tận nơi theo mô hình:
--- khách đặt trên website -> thu ngân xác nhận -> bếp chế biến -> hệ thống tạo mã vận chuyển
--- -> thu ngân bàn giao cho người giao hàng bên ngoài -> giao thành công/thất bại.
+-- khách đặt trên website -> Google Places chuẩn hóa địa chỉ -> Routes API tính quãng đường/phí -> xác thực số điện thoại -> thu ngân xác nhận
+-- -> COD xuống bếp ngay / VietQR chờ thanh toán rồi xuống bếp -> điều phối tài xế gần khi bếp hoàn tất
+-- -> bàn giao -> đối tác gửi webhook kết quả -> thu ngân đối soát.
 -- Không thêm vai trò SHIPPER.
 
 BEGIN;
@@ -32,7 +33,16 @@ CREATE TABLE IF NOT EXISTS giao_hang_don_hang (
     ten_nguoi_nhan VARCHAR(120) NOT NULL,
     so_dien_thoai_nhan VARCHAR(20) NOT NULL,
     dia_chi_giao_hang VARCHAR(500) NOT NULL,
+    dia_chi_chi_tiet VARCHAR(500),
+    phuong_xa VARCHAR(120),
+    quan_huyen VARCHAR(100),
+    tinh_thanh VARCHAR(100),
     khu_vuc_giao_hang VARCHAR(30) NOT NULL,
+    google_maps BOOLEAN NOT NULL DEFAULT FALSE,
+    google_place_id VARCHAR(255),
+    quang_duong_met INTEGER,
+    thoi_gian_du_kien_giay BIGINT,
+    google_route_polyline TEXT,
     ghi_chu_giao_hang VARCHAR(500),
     phi_giao_hang NUMERIC(12,2) NOT NULL DEFAULT 0,
     phuong_thuc_thanh_toan VARCHAR(20) NOT NULL,
@@ -40,6 +50,10 @@ CREATE TABLE IF NOT EXISTS giao_hang_don_hang (
     ma_giao_dich VARCHAR(100),
     so_tien_da_thanh_toan NUMERIC(12,2) NOT NULL DEFAULT 0,
     ghi_chu_thanh_toan VARCHAR(500),
+    so_tien_can_hoan NUMERIC(12,2) NOT NULL DEFAULT 0,
+    so_tien_da_hoan NUMERIC(12,2) NOT NULL DEFAULT 0,
+    thoi_gian_het_han_thanh_toan TIMESTAMP,
+    da_canh_bao_cho_xac_nhan BOOLEAN NOT NULL DEFAULT FALSE,
     trang_thai_giao_hang VARCHAR(30) NOT NULL DEFAULT 'CHO_XAC_NHAN',
     don_vi_van_chuyen VARCHAR(120),
     ten_nguoi_giao VARCHAR(120),
@@ -47,6 +61,11 @@ CREATE TABLE IF NOT EXISTS giao_hang_don_hang (
     ghi_chu_ban_giao VARCHAR(500),
     ly_do_tu_choi VARCHAR(500),
     ly_do_giao_that_bai VARCHAR(500),
+    trang_thai_doi_tac VARCHAR(40),
+    ly_do_doi_tac VARCHAR(500),
+    nguon_cap_nhat_doi_tac VARCHAR(40),
+    ma_su_kien_doi_tac VARCHAR(120),
+    thoi_gian_cap_nhat_doi_tac TIMESTAMP,
     thoi_gian_xac_nhan TIMESTAMP,
     thoi_gian_san_sang TIMESTAMP,
     thoi_gian_ban_giao TIMESTAMP,
@@ -66,7 +85,16 @@ ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ma_van_chuyen VARCHAR(50
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ten_nguoi_nhan VARCHAR(120);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_dien_thoai_nhan VARCHAR(20);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS dia_chi_giao_hang VARCHAR(500);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS dia_chi_chi_tiet VARCHAR(500);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS phuong_xa VARCHAR(120);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS quan_huyen VARCHAR(100);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS tinh_thanh VARCHAR(100);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS khu_vuc_giao_hang VARCHAR(30);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS google_maps BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS google_place_id VARCHAR(255);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS quang_duong_met INTEGER;
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS thoi_gian_du_kien_giay BIGINT;
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS google_route_polyline TEXT;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ghi_chu_giao_hang VARCHAR(500);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS phi_giao_hang NUMERIC(12,2) NOT NULL DEFAULT 0;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS phuong_thuc_thanh_toan VARCHAR(20);
@@ -74,6 +102,10 @@ ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS trang_thai_thanh_toan VA
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ma_giao_dich VARCHAR(100);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_tien_da_thanh_toan NUMERIC(12,2) NOT NULL DEFAULT 0;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ghi_chu_thanh_toan VARCHAR(500);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_tien_can_hoan NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_tien_da_hoan NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS thoi_gian_het_han_thanh_toan TIMESTAMP;
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS da_canh_bao_cho_xac_nhan BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS trang_thai_giao_hang VARCHAR(30) NOT NULL DEFAULT 'CHO_XAC_NHAN';
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS don_vi_van_chuyen VARCHAR(120);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ten_nguoi_giao VARCHAR(120);
@@ -81,6 +113,11 @@ ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_dien_thoai_nguoi_giao
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ghi_chu_ban_giao VARCHAR(500);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ly_do_tu_choi VARCHAR(500);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ly_do_giao_that_bai VARCHAR(500);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS trang_thai_doi_tac VARCHAR(40);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ly_do_doi_tac VARCHAR(500);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS nguon_cap_nhat_doi_tac VARCHAR(40);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ma_su_kien_doi_tac VARCHAR(120);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS thoi_gian_cap_nhat_doi_tac TIMESTAMP;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS thoi_gian_xac_nhan TIMESTAMP;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS thoi_gian_san_sang TIMESTAMP;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS thoi_gian_ban_giao TIMESTAMP;
@@ -127,6 +164,23 @@ CREATE INDEX IF NOT EXISTS idx_giao_hang_trang_thai
 
 CREATE INDEX IF NOT EXISTS idx_don_hang_loai_trang_thai
     ON don_hang (loai_don, trang_thai, thoi_gian_dat DESC);
+
+CREATE TABLE IF NOT EXISTS hoan_tien_giao_hang (
+    ma_hoan_tien BIGSERIAL PRIMARY KEY,
+    ma_giao_hang BIGINT NOT NULL,
+    so_tien NUMERIC(12,2) NOT NULL,
+    ma_giao_dich VARCHAR(100) NOT NULL,
+    ghi_chu VARCHAR(500),
+    thoi_gian_hoan TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_hoan_tien_giao_hang
+        FOREIGN KEY (ma_giao_hang) REFERENCES giao_hang_don_hang(ma_giao_hang) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_hoan_tien_giao_hang_ma_giao_dich_ci
+    ON hoan_tien_giao_hang (upper(ma_giao_dich));
+
+CREATE INDEX IF NOT EXISTS idx_hoan_tien_giao_hang_order
+    ON hoan_tien_giao_hang (ma_giao_hang, thoi_gian_hoan DESC);
 
 ALTER TABLE hoa_don
     ADD COLUMN IF NOT EXISTS phi_giao_hang NUMERIC(12,2) NOT NULL DEFAULT 0;

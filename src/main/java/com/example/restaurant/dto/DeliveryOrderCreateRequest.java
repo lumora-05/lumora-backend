@@ -16,11 +16,16 @@ public record DeliveryOrderCreateRequest(
         @NotBlank
         @Pattern(regexp = "^[0-9+ .()-]{9,20}$", message = "Số điện thoại không hợp lệ")
         String soDienThoaiNhan,
-        @NotBlank @Size(max = 500) String diaChiGiaoHang,
-        @NotBlank @Size(max = 30) String khuVucGiaoHang,
+        @Size(max = 500) String diaChiChiTiet,
+        @Size(max = 120) String phuongXa,
+        @Size(max = 100) String quanHuyen,
+        @Size(max = 100) String tinhThanh,
+        @Size(max = 255) String googlePlaceId,
+        @Size(max = 700) String googleFormattedAddress,
         @Size(max = 500) String ghiChuGiaoHang,
         @NotBlank @Size(max = 20) String phuongThucThanhToan,
         @Size(max = 255) String ghiChuDonHang,
+        @NotBlank @Size(max = 120) String phoneVerificationToken,
         @NotEmpty List<@Valid Item> items
 ) {
     public record Item(

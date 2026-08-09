@@ -33,8 +33,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
 
@@ -85,6 +87,66 @@ public class FoodTraceabilityService {
         this.transactionRepository = transactionRepository;
         this.incidentRepository = incidentRepository;
         this.systemActivityService = systemActivityService;
+    }
+
+    /**
+     * Kiểm tra trước khả năng đáp ứng toàn bộ đơn mà không trừ kho.
+     * Dùng trước khi nhà hàng nhận đơn giao hàng để tránh nhận tiền/xác nhận đơn
+     * rồi mới phát hiện thiếu nguyên liệu khi bếp bắt đầu chế biến.
+     */
+    @Transactional(readOnly = true)
+    public void validateAvailabilityForOrder(Order order) {
+        if (order == null || order.getChiTietDonHang() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Đơn hàng không hợp lệ để kiểm tra nguyên liệu");
+        }
+
+        Map<Integer, BigDecimal> requiredByIngredient = new LinkedHashMap<>();
+        Map<Integer, Ingredient> ingredients = new LinkedHashMap<>();
+        for (OrderItem item : order.getChiTietDonHang()) {
+            if (item == null || item.getMonAn() == null || "DA_HUY".equals(normalize(item.getTrangThaiMon()))) {
+                continue;
+            }
+            int portions = item.getSoLuong() == null ? 0 : item.getSoLuong();
+            if (portions <= 0) {
+                continue;
+            }
+            List<FoodRecipeIngredient> recipe = recipeRepository.findActiveByFoodId(item.getMonAn().getMaMonAn());
+            for (FoodRecipeIngredient recipeItem : recipe) {
+                BigDecimal required = safeQuantity(recipeItem.getDinhLuong())
+                        .multiply(BigDecimal.valueOf(portions));
+                if (required.compareTo(BigDecimal.ZERO) <= 0) {
+                    continue;
+                }
+                Ingredient ingredient = recipeItem.getNguyenLieu();
+                Integer ingredientId = ingredient.getMaNguyenLieu();
+                requiredByIngredient.merge(ingredientId, required, BigDecimal::add);
+                ingredients.putIfAbsent(ingredientId, ingredient);
+            }
+        }
+
+        LocalDate today = LocalDate.now();
+        for (Map.Entry<Integer, BigDecimal> entry : requiredByIngredient.entrySet()) {
+            Ingredient ingredient = ingredients.get(entry.getKey());
+            if (ingredient == null || !Boolean.TRUE.equals(ingredient.getTrangThai())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Không thể nhận đơn vì có nguyên liệu đã ngừng sử dụng"
+                );
+            }
+            BigDecimal required = safeQuantity(entry.getValue());
+            BigDecimal usable = safeQuantity(batchRepository.sumUsableRemainingByIngredient(entry.getKey(), today));
+            BigDecimal total = safeQuantity(ingredient.getSoLuongTon());
+            if (usable.compareTo(required) < 0 || total.compareTo(required) < 0) {
+                BigDecimal available = usable.min(total);
+                BigDecimal shortage = required.subtract(available.max(BigDecimal.ZERO));
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Không đủ nguyên liệu để nhận đơn. Thiếu " + strip(shortage) + " "
+                                + ingredient.getDonViTinh() + " " + ingredient.getTenNguyenLieu()
+                                + ". Chỉ tính các lô còn hạn và an toàn"
+                );
+            }
+        }
     }
 
     /**

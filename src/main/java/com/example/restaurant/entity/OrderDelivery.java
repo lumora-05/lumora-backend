@@ -55,8 +55,35 @@ public class OrderDelivery {
     @Column(name = "dia_chi_giao_hang", length = 500, nullable = false)
     private String diaChiGiaoHang;
 
+    @Column(name = "dia_chi_chi_tiet", length = 500)
+    private String diaChiChiTiet;
+
+    @Column(name = "phuong_xa", length = 120)
+    private String phuongXa;
+
+    @Column(name = "quan_huyen", length = 100)
+    private String quanHuyen;
+
+    @Column(name = "tinh_thanh", length = 100)
+    private String tinhThanh;
+
     @Column(name = "khu_vuc_giao_hang", length = 30, nullable = false)
     private String khuVucGiaoHang;
+
+    @Column(name = "google_maps", nullable = false)
+    private Boolean googleMaps = false;
+
+    @Column(name = "google_place_id", length = 255)
+    private String googlePlaceId;
+
+    @Column(name = "quang_duong_met")
+    private Integer quangDuongMet;
+
+    @Column(name = "thoi_gian_du_kien_giay")
+    private Long thoiGianDuKienGiay;
+
+    @Column(name = "google_route_polyline", columnDefinition = "TEXT")
+    private String googleRoutePolyline;
 
     @Column(name = "ghi_chu_giao_hang", length = 500)
     private String ghiChuGiaoHang;
@@ -68,7 +95,7 @@ public class OrderDelivery {
     @Column(name = "phuong_thuc_thanh_toan", length = 20, nullable = false)
     private String phuongThucThanhToan;
 
-    /** CHO_THANH_TOAN, DA_THANH_TOAN hoặc CHO_HOAN_TIEN. */
+    /** CHO_THANH_TOAN, DA_THANH_TOAN, CHO_HOAN_TIEN, DA_HOAN_TIEN hoặc HET_HAN. */
     @Column(name = "trang_thai_thanh_toan", length = 30, nullable = false)
     private String trangThaiThanhToan = "CHO_THANH_TOAN";
 
@@ -81,7 +108,19 @@ public class OrderDelivery {
     @Column(name = "ghi_chu_thanh_toan", length = 500)
     private String ghiChuThanhToan;
 
-    /** CHO_XAC_NHAN, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
+    @Column(name = "so_tien_can_hoan", precision = 12, scale = 2)
+    private BigDecimal soTienCanHoan = BigDecimal.ZERO;
+
+    @Column(name = "so_tien_da_hoan", precision = 12, scale = 2)
+    private BigDecimal soTienDaHoan = BigDecimal.ZERO;
+
+    @Column(name = "thoi_gian_het_han_thanh_toan")
+    private LocalDateTime thoiGianHetHanThanhToan;
+
+    @Column(name = "da_canh_bao_cho_xac_nhan", nullable = false)
+    private Boolean daCanhBaoChoXacNhan = false;
+
+    /** CHO_XAC_NHAN, CHO_THANH_TOAN, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, CHO_DOI_SOAT, HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
     @Column(name = "trang_thai_giao_hang", length = 30, nullable = false)
     private String trangThaiGiaoHang = "CHO_XAC_NHAN";
 
@@ -102,6 +141,22 @@ public class OrderDelivery {
 
     @Column(name = "ly_do_giao_that_bai", length = 500)
     private String lyDoGiaoThatBai;
+
+    /** Trạng thái do đối tác giao hàng gửi về qua webhook: GIAO_THANH_CONG/GIAO_THAT_BAI. */
+    @Column(name = "trang_thai_doi_tac", length = 40)
+    private String trangThaiDoiTac;
+
+    @Column(name = "ly_do_doi_tac", length = 500)
+    private String lyDoDoiTac;
+
+    @Column(name = "nguon_cap_nhat_doi_tac", length = 40)
+    private String nguonCapNhatDoiTac;
+
+    @Column(name = "ma_su_kien_doi_tac", length = 120)
+    private String maSuKienDoiTac;
+
+    @Column(name = "thoi_gian_cap_nhat_doi_tac")
+    private LocalDateTime thoiGianCapNhatDoiTac;
 
     @Column(name = "thoi_gian_xac_nhan")
     private LocalDateTime thoiGianXacNhan;
@@ -137,6 +192,18 @@ public class OrderDelivery {
         if (soTienDaThanhToan == null || soTienDaThanhToan.signum() < 0) {
             soTienDaThanhToan = BigDecimal.ZERO;
         }
+        if (soTienCanHoan == null || soTienCanHoan.signum() < 0) {
+            soTienCanHoan = BigDecimal.ZERO;
+        }
+        if (soTienDaHoan == null || soTienDaHoan.signum() < 0) {
+            soTienDaHoan = BigDecimal.ZERO;
+        }
+        if (daCanhBaoChoXacNhan == null) {
+            daCanhBaoChoXacNhan = false;
+        }
+        if (googleMaps == null) {
+            googleMaps = false;
+        }
         if (trangThaiThanhToan == null || trangThaiThanhToan.isBlank()) {
             trangThaiThanhToan = "CHO_THANH_TOAN";
         }
@@ -153,6 +220,18 @@ public class OrderDelivery {
         }
         if (soTienDaThanhToan == null || soTienDaThanhToan.signum() < 0) {
             soTienDaThanhToan = BigDecimal.ZERO;
+        }
+        if (soTienCanHoan == null || soTienCanHoan.signum() < 0) {
+            soTienCanHoan = BigDecimal.ZERO;
+        }
+        if (soTienDaHoan == null || soTienDaHoan.signum() < 0) {
+            soTienDaHoan = BigDecimal.ZERO;
+        }
+        if (daCanhBaoChoXacNhan == null) {
+            daCanhBaoChoXacNhan = false;
+        }
+        if (googleMaps == null) {
+            googleMaps = false;
         }
     }
 }
