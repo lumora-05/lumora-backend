@@ -23,6 +23,31 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Integer> {
     @Query("""
             select i.monAn.maMonAn,
                    i.monAn.tenMonAn,
+                   i.monAn.gia,
+                   i.monAn.moTa,
+                   i.monAn.hinhAnh,
+                   sum(i.soLuong)
+            from OrderItem i
+            where i.monAn.trangThai = true
+              and exists (
+                  select inv.maHoaDon
+                  from Invoice inv
+                  where inv.donHang = i.donHang
+                    and inv.trangThaiThanhToan = :paidStatus
+              )
+              and upper(i.trangThaiMon) <> 'DA_HUY'
+            group by i.monAn.maMonAn,
+                     i.monAn.tenMonAn,
+                     i.monAn.gia,
+                     i.monAn.moTa,
+                     i.monAn.hinhAnh
+            order by sum(i.soLuong) desc, i.monAn.maMonAn asc
+            """)
+    List<Object[]> findTopSellingFoods(@Param("paidStatus") String paidStatus);
+
+    @Query("""
+            select i.monAn.maMonAn,
+                   i.monAn.tenMonAn,
                    i.monAn.hinhAnh,
                    sum(i.soLuong),
                    sum(i.donGia * i.soLuong)

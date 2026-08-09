@@ -3,6 +3,7 @@ package com.example.restaurant.controller;
 import com.example.restaurant.dto.ApiResponse;
 import com.example.restaurant.dto.FoodRequest;
 import com.example.restaurant.dto.PageResponse;
+import com.example.restaurant.dto.TopSellingFoodResponse;
 import com.example.restaurant.entity.Food;
 import com.example.restaurant.service.MenuService;
 import jakarta.validation.Valid;
@@ -26,6 +27,15 @@ public class MenuController {
     public ResponseEntity<ApiResponse<List<Food>>> activeMenu() {
         List<Food> foods = menuService.findActiveFoods();
         return ResponseEntity.ok(ApiResponse.success("Lấy danh sách thực đơn đang bán thành công", foods));
+    }
+
+    @GetMapping("/top-selling")
+    public ResponseEntity<ApiResponse<List<TopSellingFoodResponse>>> topSellingFoods(
+            @RequestParam(defaultValue = "4") int limit) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy danh sách món bán chạy thành công",
+                menuService.findTopSellingFoods(limit)
+        ));
     }
 
     @GetMapping("/all")

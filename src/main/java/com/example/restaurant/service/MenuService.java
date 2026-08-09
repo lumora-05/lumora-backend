@@ -1,6 +1,7 @@
 package com.example.restaurant.service;
 
 import com.example.restaurant.dto.FoodRequest;
+import com.example.restaurant.dto.TopSellingFoodResponse;
 import com.example.restaurant.entity.Category;
 import com.example.restaurant.entity.Food;
 import com.example.restaurant.repository.CategoryRepository;
@@ -24,6 +25,8 @@ import java.util.Objects;
 
 @Service
 public class MenuService {
+    private static final String PAID_STATUS = "DA_THANH_TOAN";
+
     private final FoodRepository foodRepository;
     private final FoodRecipeIngredientRepository recipeRepository;
     private final CategoryRepository categoryRepository;
@@ -50,6 +53,27 @@ public class MenuService {
 
     public List<Food> findActiveFoods() {
         return foodRepository.findByTrangThaiTrue();
+    }
+
+    /**
+     * Top món bán chạy dùng cho trang chủ công khai.
+     * Chỉ tính số lượng của các món đang bán trong những đơn đã thanh toán,
+     * bỏ qua món đã hủy và xếp giảm dần theo tổng số lượng đã bán.
+     */
+    @Transactional(readOnly = true)
+    public List<TopSellingFoodResponse> findTopSellingFoods(int limit) {
+        int safeLimit = Math.min(Math.max(limit, 1), 20);
+        return orderItemRepository.findTopSellingFoods(PAID_STATUS).stream()
+                .limit(safeLimit)
+                .map(row -> new TopSellingFoodResponse(
+                        (Integer) row[0],
+                        (String) row[1],
+                        (java.math.BigDecimal) row[2],
+                        (String) row[3],
+                        (String) row[4],
+                        ((Number) row[5]).longValue()
+                ))
+                .toList();
     }
 
     public List<Food> findAll() {
