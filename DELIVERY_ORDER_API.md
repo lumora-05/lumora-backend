@@ -2,7 +2,7 @@
 
 ## Luồng nghiệp vụ hiện tại
 
-1. Khách nhập địa chỉ, backend xác định khu vực/phí giao và xác thực số điện thoại bằng OTP demo.
+1. Khách nhập thông tin người nhận và địa chỉ; backend kiểm tra định dạng số điện thoại, xác định khu vực/phí giao.
 2. Khách gửi đơn ở trạng thái `CHO_XAC_NHAN`.
 3. Thu ngân/admin xác nhận sau khi backend kiểm tra khả năng đáp ứng nguyên liệu.
 4. COD chuyển xuống bếp ngay. VietQR chuyển sang `CHO_THANH_TOAN`; khách chỉ được tạo QR sau bước này. Khi thu ngân xác nhận tiền, backend kiểm tra lại nguyên liệu rồi mới chuyển bếp.
@@ -49,15 +49,6 @@ POST /api/customer/delivery/quote
 
 Frontend không gửi `phiGiaoHang` hoặc `khuVucGiaoHang` khi tạo đơn.
 
-### OTP số điện thoại
-
-```http
-POST /api/customer/delivery/phone-otp/request
-POST /api/customer/delivery/phone-otp/verify
-```
-
-Bản đồ án mặc định trả `demoOtp` để trình diễn. Khi triển khai thật, thay phần phát OTP bằng adapter SMS và đặt `DELIVERY_EXPOSE_DEMO_OTP=false`.
-
 ### Tạo đơn
 
 ```http
@@ -75,7 +66,6 @@ POST /api/customer/delivery/orders
   "tinhThanh": "Đà Nẵng",
   "ghiChuGiaoHang": "Gọi trước khi đến",
   "phuongThucThanhToan": "VIETQR",
-  "phoneVerificationToken": "token-sau-khi-verify-otp",
   "items": [{ "maMonAn": 5, "soLuong": 2, "ghiChu": "Không cay" }]
 }
 ```
@@ -146,10 +136,6 @@ DELIVERY_PAYMENT_TIMEOUT_MINUTES=15
 DELIVERY_CONFIRMATION_WARNING_MINUTES=10
 DELIVERY_DRIVER_ASSIGNMENT_PROGRESS_PERCENT=70
 DELIVERY_PROVIDER_WEBHOOK_TOKEN=<secret>
-DELIVERY_OTP_EXPIRY_MINUTES=5
-DELIVERY_PHONE_VERIFICATION_MINUTES=20
-DELIVERY_REQUIRE_PHONE_VERIFICATION=true
-DELIVERY_EXPOSE_DEMO_OTP=true
 ```
 
 Cơ sở dữ liệu dùng `spring.jpa.hibernate.ddl-auto=update`; file `database/delivery_order_upgrade.sql` cũng đã được cập nhật để có thể nâng cấp PostgreSQL/Neon chủ động.

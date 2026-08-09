@@ -25,7 +25,6 @@ public record DeliveryOrderCreateRequest(
         @Size(max = 500) String ghiChuGiaoHang,
         @NotBlank @Size(max = 20) String phuongThucThanhToan,
         @Size(max = 255) String ghiChuDonHang,
-        @NotBlank @Size(max = 120) String phoneVerificationToken,
         @NotEmpty List<@Valid Item> items
 ) {
     public record Item(

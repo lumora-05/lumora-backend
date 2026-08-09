@@ -3,17 +3,12 @@ package com.example.restaurant.controller;
 import com.example.restaurant.dto.ApiResponse;
 import com.example.restaurant.dto.DeliveryOrderCreateRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateResponse;
-import com.example.restaurant.dto.DeliveryOtpRequest;
-import com.example.restaurant.dto.DeliveryOtpRequestResponse;
-import com.example.restaurant.dto.DeliveryOtpVerifyRequest;
-import com.example.restaurant.dto.DeliveryOtpVerifyResponse;
 import com.example.restaurant.dto.DeliveryQuoteRequest;
 import com.example.restaurant.dto.DeliveryQuoteResponse;
 import com.example.restaurant.dto.DeliveryReasonRequest;
 import com.example.restaurant.dto.DeliveryTrackingResponse;
 import com.example.restaurant.dto.VietQrResponse;
 import com.example.restaurant.service.DeliveryOrderService;
-import com.example.restaurant.service.DeliveryPhoneVerificationService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -22,12 +17,8 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/customer/delivery")
 public class CustomerDeliveryController {
     private final DeliveryOrderService deliveryOrderService;
-    private final DeliveryPhoneVerificationService phoneVerificationService;
-
-    public CustomerDeliveryController(DeliveryOrderService deliveryOrderService,
-                                      DeliveryPhoneVerificationService phoneVerificationService) {
+    public CustomerDeliveryController(DeliveryOrderService deliveryOrderService) {
         this.deliveryOrderService = deliveryOrderService;
-        this.phoneVerificationService = phoneVerificationService;
     }
 
     /** Backend tự xác định khu vực và phí giao; frontend không được tự quyết định phí. */
@@ -37,25 +28,6 @@ public class CustomerDeliveryController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Tính phí giao hàng thành công",
                 deliveryOrderService.quote(request)
-        ));
-    }
-
-    /** OTP demo để xác thực số điện thoại trước khi cho phép tạo đơn giao hàng công khai. */
-    @PostMapping("/phone-otp/request")
-    public ResponseEntity<ApiResponse<DeliveryOtpRequestResponse>> requestOtp(
-            @Valid @RequestBody DeliveryOtpRequest request) {
-        return ResponseEntity.ok(ApiResponse.success(
-                "Đã tạo mã xác thực số điện thoại",
-                phoneVerificationService.requestOtp(request.soDienThoai())
-        ));
-    }
-
-    @PostMapping("/phone-otp/verify")
-    public ResponseEntity<ApiResponse<DeliveryOtpVerifyResponse>> verifyOtp(
-            @Valid @RequestBody DeliveryOtpVerifyRequest request) {
-        return ResponseEntity.ok(ApiResponse.success(
-                "Xác thực số điện thoại thành công",
-                phoneVerificationService.verifyOtp(request.requestId(), request.soDienThoai(), request.otp())
         ));
     }
 

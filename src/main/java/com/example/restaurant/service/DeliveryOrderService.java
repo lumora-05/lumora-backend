@@ -91,7 +91,6 @@ public class DeliveryOrderService {
     private final GoogleMapsRouteService googleMapsRouteService;
     private final DeliveryProviderService deliveryProviderService;
     private final FoodTraceabilityService foodTraceabilityService;
-    private final DeliveryPhoneVerificationService phoneVerificationService;
     private final RealtimeNotificationService realtimeNotificationService;
     private final SystemActivityService systemActivityService;
 
@@ -107,7 +106,6 @@ public class DeliveryOrderService {
                                 GoogleMapsRouteService googleMapsRouteService,
                                 DeliveryProviderService deliveryProviderService,
                                 FoodTraceabilityService foodTraceabilityService,
-                                DeliveryPhoneVerificationService phoneVerificationService,
                                 RealtimeNotificationService realtimeNotificationService,
                                 SystemActivityService systemActivityService) {
         this.orderRepository = orderRepository;
@@ -122,7 +120,6 @@ public class DeliveryOrderService {
         this.googleMapsRouteService = googleMapsRouteService;
         this.deliveryProviderService = deliveryProviderService;
         this.foodTraceabilityService = foodTraceabilityService;
-        this.phoneVerificationService = phoneVerificationService;
         this.realtimeNotificationService = realtimeNotificationService;
         this.systemActivityService = systemActivityService;
     }
@@ -248,8 +245,6 @@ public class DeliveryOrderService {
         delivery.setDaCanhBaoChoXacNhan(false);
         order.setGiaoHang(delivery);
 
-        // Chỉ tiêu thụ token OTP sau khi dữ liệu/địa chỉ/món đã vượt qua các bước kiểm tra cơ bản.
-        phoneVerificationService.consumeVerifiedPhone(request.phoneVerificationToken(), recipientPhone);
         orderPricingService.recalculate(order);
         Order savedOrder = orderRepository.saveAndFlush(order);
 

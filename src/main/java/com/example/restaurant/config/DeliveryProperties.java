@@ -28,8 +28,4 @@ public class DeliveryProperties {
     private Integer confirmationWarningMinutes = 10;
     private Integer driverAssignmentProgressPercent = 70;
     private String providerWebhookToken = "";
-    private Integer otpExpiryMinutes = 5;
-    private Integer phoneVerificationMinutes = 20;
-    private Boolean requirePhoneVerification = true;
-    private Boolean exposeDemoOtp = true;
 }

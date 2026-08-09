@@ -1,5 +1,5 @@
 -- Nâng cấp chức năng khách đặt món giao tận nơi theo mô hình:
--- khách đặt trên website -> Google Places chuẩn hóa địa chỉ -> Routes API tính quãng đường/phí -> xác thực số điện thoại -> thu ngân xác nhận
+-- khách đặt trên website -> Google Places chuẩn hóa địa chỉ -> Routes API tính quãng đường/phí -> thu ngân xác nhận
 -- -> COD xuống bếp ngay / VietQR chờ thanh toán rồi xuống bếp -> điều phối tài xế gần khi bếp hoàn tất
 -- -> bàn giao -> đối tác gửi webhook kết quả -> thu ngân đối soát.
 -- Không thêm vai trò SHIPPER.
