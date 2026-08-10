@@ -64,6 +64,28 @@ public class SystemSettingRequest {
     @Max(value = 365, message = "Số ngày đặt trước tối đa không được vượt quá 365 ngày")
     private Integer reservationMaximumAdvanceDays;
 
+    // Giao hàng theo quãng đường
+    @DecimalMin(value = "0.1", message = "Mốc khoảng cách mức 1 phải lớn hơn 0 km")
+    @DecimalMax(value = "100.0", message = "Mốc khoảng cách mức 1 không được vượt quá 100 km")
+    private Double deliveryTier1DistanceKm;
+
+    @DecimalMin(value = "0.1", message = "Mốc khoảng cách mức 2 phải lớn hơn 0 km")
+    @DecimalMax(value = "100.0", message = "Mốc khoảng cách mức 2 không được vượt quá 100 km")
+    private Double deliveryTier2DistanceKm;
+
+    @DecimalMin(value = "0.1", message = "Khoảng cách giao tối đa phải lớn hơn 0 km")
+    @DecimalMax(value = "100.0", message = "Khoảng cách giao tối đa không được vượt quá 100 km")
+    private Double deliveryMaxDistanceKm;
+
+    @DecimalMin(value = "0.00", message = "Phí giao mức 1 không được âm")
+    private BigDecimal deliveryTier1Fee;
+
+    @DecimalMin(value = "0.00", message = "Phí giao mức 2 không được âm")
+    private BigDecimal deliveryTier2Fee;
+
+    @DecimalMin(value = "0.00", message = "Phí giao mức 3 không được âm")
+    private BigDecimal deliveryTier3Fee;
+
     // Thanh toán VietQR
     @Size(max = 30, message = "Mã ngân hàng không được vượt quá 30 ký tự")
     private String vietQrBankId;

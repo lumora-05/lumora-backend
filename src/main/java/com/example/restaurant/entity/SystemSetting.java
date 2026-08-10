@@ -73,6 +73,25 @@ public class SystemSetting {
     @Column(name = "reservation_maximum_advance_days")
     private Integer reservationMaximumAdvanceDays;
 
+    // Giao hàng theo quãng đường
+    @Column(name = "delivery_tier1_distance_km")
+    private Double deliveryTier1DistanceKm;
+
+    @Column(name = "delivery_tier2_distance_km")
+    private Double deliveryTier2DistanceKm;
+
+    @Column(name = "delivery_max_distance_km")
+    private Double deliveryMaxDistanceKm;
+
+    @Column(name = "delivery_tier1_fee", precision = 18, scale = 2)
+    private BigDecimal deliveryTier1Fee;
+
+    @Column(name = "delivery_tier2_fee", precision = 18, scale = 2)
+    private BigDecimal deliveryTier2Fee;
+
+    @Column(name = "delivery_tier3_fee", precision = 18, scale = 2)
+    private BigDecimal deliveryTier3Fee;
+
     // Thanh toán VietQR
     @Column(name = "vietqr_bank_id", length = 30)
     private String vietQrBankId;

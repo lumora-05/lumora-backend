@@ -14,6 +14,12 @@ CREATE TABLE IF NOT EXISTS cai_dat_he_thong (
     reservation_default_duration_minutes INTEGER,
     reservation_preparation_minutes INTEGER,
     reservation_no_show_grace_minutes INTEGER,
+    delivery_tier1_distance_km DOUBLE PRECISION,
+    delivery_tier2_distance_km DOUBLE PRECISION,
+    delivery_max_distance_km DOUBLE PRECISION,
+    delivery_tier1_fee NUMERIC(18,2),
+    delivery_tier2_fee NUMERIC(18,2),
+    delivery_tier3_fee NUMERIC(18,2),
     vietqr_bank_id VARCHAR(30),
     vietqr_bank_name VARCHAR(120),
     vietqr_account_no VARCHAR(50),
@@ -38,6 +44,12 @@ CREATE TABLE IF NOT EXISTS cai_dat_he_thong (
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_default_duration_minutes INTEGER;
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_preparation_minutes INTEGER;
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_no_show_grace_minutes INTEGER;
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_tier1_distance_km DOUBLE PRECISION;
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_tier2_distance_km DOUBLE PRECISION;
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_max_distance_km DOUBLE PRECISION;
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_tier1_fee NUMERIC(18,2);
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_tier2_fee NUMERIC(18,2);
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_tier3_fee NUMERIC(18,2);
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS vietqr_bank_id VARCHAR(30);
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS vietqr_bank_name VARCHAR(120);
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS vietqr_account_no VARCHAR(50);

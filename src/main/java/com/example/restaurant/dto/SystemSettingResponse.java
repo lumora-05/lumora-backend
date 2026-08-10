@@ -32,6 +32,14 @@ public class SystemSettingResponse {
     private Integer reservationMinimumAdvanceMinutes;
     private Integer reservationMaximumAdvanceDays;
 
+    // Giao hàng theo quãng đường
+    private Double deliveryTier1DistanceKm;
+    private Double deliveryTier2DistanceKm;
+    private Double deliveryMaxDistanceKm;
+    private BigDecimal deliveryTier1Fee;
+    private BigDecimal deliveryTier2Fee;
+    private BigDecimal deliveryTier3Fee;
+
     // Thanh toán
     private String vietQrBankId;
     private String vietQrBankName;

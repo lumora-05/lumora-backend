@@ -2,6 +2,7 @@ package com.example.restaurant.service;
 
 import com.example.restaurant.config.ChatbotAiProperties;
 import com.example.restaurant.config.LoyaltyPolicyProperties;
+import com.example.restaurant.config.OpenRouteServiceProperties;
 import com.example.restaurant.config.ReservationPolicyProperties;
 import com.example.restaurant.config.RestaurantInfoProperties;
 import com.example.restaurant.config.VietQrProperties;
@@ -10,10 +11,12 @@ import com.example.restaurant.dto.SystemSettingRequest;
 import com.example.restaurant.dto.SystemSettingResponse;
 import com.example.restaurant.entity.SystemSetting;
 import com.example.restaurant.repository.SystemSettingRepository;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 
@@ -36,6 +39,7 @@ public class SystemSettingService {
     private final ReservationPolicyProperties reservationPolicyProperties;
     private final LoyaltyPolicyProperties loyaltyPolicyProperties;
     private final ChatbotAiProperties chatbotAiProperties;
+    private final OpenRouteServiceProperties openRouteServiceProperties;
     private final FileStorageService fileStorageService;
     private final SystemActivityService systemActivityService;
 
@@ -45,6 +49,7 @@ public class SystemSettingService {
                                 ReservationPolicyProperties reservationPolicyProperties,
                                 LoyaltyPolicyProperties loyaltyPolicyProperties,
                                 ChatbotAiProperties chatbotAiProperties,
+                                OpenRouteServiceProperties openRouteServiceProperties,
                                 FileStorageService fileStorageService,
                                 SystemActivityService systemActivityService) {
         this.systemSettingRepository = systemSettingRepository;
@@ -53,6 +58,7 @@ public class SystemSettingService {
         this.reservationPolicyProperties = reservationPolicyProperties;
         this.loyaltyPolicyProperties = loyaltyPolicyProperties;
         this.chatbotAiProperties = chatbotAiProperties;
+        this.openRouteServiceProperties = openRouteServiceProperties;
         this.fileStorageService = fileStorageService;
         this.systemActivityService = systemActivityService;
     }
@@ -103,6 +109,26 @@ public class SystemSettingService {
         if (request.getReservationMaximumAdvanceDays() != null) {
             setting.setReservationMaximumAdvanceDays(request.getReservationMaximumAdvanceDays());
         }
+
+        if (request.getDeliveryTier1DistanceKm() != null) {
+            setting.setDeliveryTier1DistanceKm(request.getDeliveryTier1DistanceKm());
+        }
+        if (request.getDeliveryTier2DistanceKm() != null) {
+            setting.setDeliveryTier2DistanceKm(request.getDeliveryTier2DistanceKm());
+        }
+        if (request.getDeliveryMaxDistanceKm() != null) {
+            setting.setDeliveryMaxDistanceKm(request.getDeliveryMaxDistanceKm());
+        }
+        if (request.getDeliveryTier1Fee() != null) {
+            setting.setDeliveryTier1Fee(request.getDeliveryTier1Fee());
+        }
+        if (request.getDeliveryTier2Fee() != null) {
+            setting.setDeliveryTier2Fee(request.getDeliveryTier2Fee());
+        }
+        if (request.getDeliveryTier3Fee() != null) {
+            setting.setDeliveryTier3Fee(request.getDeliveryTier3Fee());
+        }
+        validateDeliverySettings(setting);
 
         if (request.getVietQrBankId() != null) {
             setting.setVietQrBankId(cleanOptional(request.getVietQrBankId()));
@@ -278,6 +304,13 @@ public class SystemSettingService {
         setting.setReservationMinimumAdvanceMinutes(DEFAULT_RESERVATION_MINIMUM_ADVANCE_MINUTES);
         setting.setReservationMaximumAdvanceDays(DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS);
 
+        setting.setDeliveryTier1DistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getTier1DistanceKm(), 3.0d));
+        setting.setDeliveryTier2DistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getTier2DistanceKm(), 6.0d));
+        setting.setDeliveryMaxDistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getMaxDeliveryDistanceKm(), 10.0d));
+        setting.setDeliveryTier1Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier1Fee(), new BigDecimal("15000")));
+        setting.setDeliveryTier2Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier2Fee(), new BigDecimal("20000")));
+        setting.setDeliveryTier3Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier3Fee(), new BigDecimal("30000")));
+
         setting.setVietQrBankId(cleanOptional(vietQrProperties.getBankId()));
         setting.setVietQrBankName(cleanOptional(vietQrProperties.getBankName()));
         setting.setVietQrAccountNo(cleanOptional(vietQrProperties.getAccountNo()));
@@ -330,6 +363,32 @@ public class SystemSettingService {
             setting.setReservationMaximumAdvanceDays(DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS);
             changed = true;
         }
+
+        if (setting.getDeliveryTier1DistanceKm() == null) {
+            setting.setDeliveryTier1DistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getTier1DistanceKm(), 3.0d));
+            changed = true;
+        }
+        if (setting.getDeliveryTier2DistanceKm() == null) {
+            setting.setDeliveryTier2DistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getTier2DistanceKm(), 6.0d));
+            changed = true;
+        }
+        if (setting.getDeliveryMaxDistanceKm() == null) {
+            setting.setDeliveryMaxDistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getMaxDeliveryDistanceKm(), 10.0d));
+            changed = true;
+        }
+        if (setting.getDeliveryTier1Fee() == null) {
+            setting.setDeliveryTier1Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier1Fee(), new BigDecimal("15000")));
+            changed = true;
+        }
+        if (setting.getDeliveryTier2Fee() == null) {
+            setting.setDeliveryTier2Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier2Fee(), new BigDecimal("20000")));
+            changed = true;
+        }
+        if (setting.getDeliveryTier3Fee() == null) {
+            setting.setDeliveryTier3Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier3Fee(), new BigDecimal("30000")));
+            changed = true;
+        }
+        validateDeliverySettings(setting);
 
         if (setting.getVietQrBankId() == null && StringUtils.hasText(vietQrProperties.getBankId())) {
             setting.setVietQrBankId(vietQrProperties.getBankId().trim());
@@ -430,6 +489,26 @@ public class SystemSettingService {
                 positiveOrDefault(setting.getReservationMaximumAdvanceDays(), DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS)
         );
 
+        // Giao hàng theo quãng đường
+        openRouteServiceProperties.setTier1DistanceKm(
+                positiveDoubleOrDefault(setting.getDeliveryTier1DistanceKm(), 3.0d)
+        );
+        openRouteServiceProperties.setTier2DistanceKm(
+                positiveDoubleOrDefault(setting.getDeliveryTier2DistanceKm(), 6.0d)
+        );
+        openRouteServiceProperties.setMaxDeliveryDistanceKm(
+                positiveDoubleOrDefault(setting.getDeliveryMaxDistanceKm(), 10.0d)
+        );
+        openRouteServiceProperties.setTier1Fee(
+                nonNegativeMoneyOrDefault(setting.getDeliveryTier1Fee(), new BigDecimal("15000"))
+        );
+        openRouteServiceProperties.setTier2Fee(
+                nonNegativeMoneyOrDefault(setting.getDeliveryTier2Fee(), new BigDecimal("20000"))
+        );
+        openRouteServiceProperties.setTier3Fee(
+                nonNegativeMoneyOrDefault(setting.getDeliveryTier3Fee(), new BigDecimal("30000"))
+        );
+
         // Thanh toán VietQR
         vietQrProperties.setBankId(cleanOptional(setting.getVietQrBankId()));
         vietQrProperties.setBankName(cleanOptional(setting.getVietQrBankName()));
@@ -475,6 +554,12 @@ public class SystemSettingService {
                 .menuUrl(setting.getMenuUrl())
                 .logoUrl(setting.getLogoUrl())
                 .bannerUrl(setting.getBannerUrl())
+                .deliveryTier1DistanceKm(setting.getDeliveryTier1DistanceKm())
+                .deliveryTier2DistanceKm(setting.getDeliveryTier2DistanceKm())
+                .deliveryMaxDistanceKm(setting.getDeliveryMaxDistanceKm())
+                .deliveryTier1Fee(setting.getDeliveryTier1Fee())
+                .deliveryTier2Fee(setting.getDeliveryTier2Fee())
+                .deliveryTier3Fee(setting.getDeliveryTier3Fee())
                 .reservationDefaultDurationMinutes(setting.getReservationDefaultDurationMinutes())
                 .reservationPreparationMinutes(setting.getReservationPreparationMinutes())
                 .reservationNoShowGraceMinutes(setting.getReservationNoShowGraceMinutes())
@@ -560,6 +645,35 @@ public class SystemSettingService {
 
     private BigDecimal ratioOrDefault(BigDecimal value, BigDecimal fallback) {
         return value != null && value.signum() >= 0 && value.compareTo(BigDecimal.ONE) <= 0 ? value : fallback;
+    }
+
+    private double positiveDoubleOrDefault(Double value, double fallback) {
+        return value != null && Double.isFinite(value) && value > 0d ? value : fallback;
+    }
+
+    private BigDecimal nonNegativeMoneyOrDefault(BigDecimal value, BigDecimal fallback) {
+        return value != null && value.signum() >= 0 ? value : fallback;
+    }
+
+    private void validateDeliverySettings(SystemSetting setting) {
+        Double tier1 = setting.getDeliveryTier1DistanceKm();
+        Double tier2 = setting.getDeliveryTier2DistanceKm();
+        Double max = setting.getDeliveryMaxDistanceKm();
+
+        if (tier1 == null || tier2 == null || max == null
+                || !Double.isFinite(tier1) || !Double.isFinite(tier2) || !Double.isFinite(max)
+                || tier1 <= 0d || tier2 <= tier1 || max <= tier2) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Cấu hình khoảng cách giao hàng phải thỏa mãn: mức 1 < mức 2 < khoảng cách tối đa"
+            );
+        }
+
+        if (setting.getDeliveryTier1Fee() == null || setting.getDeliveryTier1Fee().signum() < 0
+                || setting.getDeliveryTier2Fee() == null || setting.getDeliveryTier2Fee().signum() < 0
+                || setting.getDeliveryTier3Fee() == null || setting.getDeliveryTier3Fee().signum() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phí giao hàng không được âm");
+        }
     }
 
     private double clamp(double value, double min, double max) {
