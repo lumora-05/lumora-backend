@@ -45,37 +45,16 @@ public class DeliveryOrderController {
     }
 
     /**
-     * Thu ngân nhận đơn sau khi backend kiểm tra khả năng đáp ứng.
-     * COD chuyển bếp ngay; VietQR chuyển sang CHO_THANH_TOAN rồi mới xuống bếp sau khi nhận tiền.
+     * Luồng mới không còn bước thu ngân duyệt đơn. COD hợp lệ được backend
+     * chuyển thẳng xuống bếp; VietQR chỉ chờ ghi nhận thanh toán.
      */
-    @PostMapping("/{orderId}/confirm")
-    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
-    public ResponseEntity<ApiResponse<Order>> confirm(@PathVariable Integer orderId) {
-        return ResponseEntity.ok(ApiResponse.success(
-                "Đã xác nhận tiếp nhận đơn giao hàng",
-                deliveryOrderService.confirm(orderId)
-        ));
-    }
-
-    @PostMapping("/{orderId}/reject")
-    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
-    public ResponseEntity<ApiResponse<Order>> reject(
-            @PathVariable Integer orderId,
-            @Valid @RequestBody DeliveryReasonRequest request) {
-        return ResponseEntity.ok(ApiResponse.success(
-                "Đã từ chối đơn giao hàng",
-                deliveryOrderService.reject(orderId, request)
-        ));
-    }
-
-    /** Xác nhận VietQR sau khi đơn đã được nhà hàng nhận; thành công mới chuyển xuống bếp. */
     @PostMapping("/{orderId}/confirm-vietqr")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<Order>> confirmVietQr(
             @PathVariable Integer orderId,
             @Valid @RequestBody DeliveryPaymentConfirmRequest request) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Đã xác nhận tiền VietQR và chuyển đơn xuống bếp",
+                "Đã ghi nhận tiền VietQR và chuyển đơn xuống bếp",
                 deliveryOrderService.confirmVietQrPayment(orderId, request)
         ));
     }
@@ -104,7 +83,7 @@ public class DeliveryOrderController {
         ));
     }
 
-    /** Sau webhook giao thành công, thu ngân đối soát và ghi nhận hóa đơn kế toán. */
+    /** Bước nội bộ sau giao thành công: ghi nhận hóa đơn/kế toán, không hiển thị trong hành trình khách. */
     @PostMapping("/{orderId}/complete")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<Order>> complete(
@@ -112,7 +91,7 @@ public class DeliveryOrderController {
             Principal principal) {
         String username = principal == null ? null : principal.getName();
         return ResponseEntity.ok(ApiResponse.success(
-                "Đã đối soát giao hàng thành công và tạo hóa đơn",
+                "Đã ghi nhận hóa đơn cho đơn giao thành công",
                 deliveryOrderService.complete(orderId, username)
         ));
     }
@@ -129,7 +108,7 @@ public class DeliveryOrderController {
         ));
     }
 
-    /** Mô phỏng webhook của GrabExpress Demo phục vụ trình diễn đồ án. */
+    /** Mô phỏng webhook của đối tác vận chuyển phục vụ trình diễn đồ án. */
     @PostMapping("/{orderId}/simulate-provider-result")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<Order>> simulateProviderResult(

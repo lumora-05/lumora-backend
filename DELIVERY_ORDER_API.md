@@ -2,37 +2,40 @@
 
 ## Luồng nghiệp vụ hiện tại
 
-1. Khách nhập thông tin người nhận và địa chỉ; backend kiểm tra định dạng số điện thoại, xác định khu vực/phí giao.
-2. Khách gửi đơn ở trạng thái `CHO_XAC_NHAN`.
-3. Thu ngân/admin xác nhận sau khi backend kiểm tra khả năng đáp ứng nguyên liệu.
-4. COD chuyển xuống bếp ngay. VietQR chuyển sang `CHO_THANH_TOAN`; khách chỉ được tạo QR sau bước này. Khi thu ngân xác nhận tiền, backend kiểm tra lại nguyên liệu rồi mới chuyển bếp.
-5. Khi tiến độ bếp đạt ngưỡng cấu hình (mặc định 70%), backend có thể điều phối sớm GrabExpress (Demo). Chỉ khi toàn bộ món hoàn tất mới cho bàn giao.
-6. Sau bàn giao, kết quả giao được nhận từ webhook đối tác. Với bản demo có API mô phỏng webhook dành cho CASHIER/ADMIN.
-7. Đối tác báo giao thành công -> `CHO_DOI_SOAT`; thu ngân đối soát và tạo hóa đơn -> `HOAN_THANH`.
-8. Nếu tiền VietQR đã thu nhưng tổng tiền giảm hoặc đơn bị hủy, hệ thống chuyển `CHO_HOAN_TIEN`; thu ngân phải ghi nhận giao dịch hoàn tiền. Hoàn hết đơn bị hủy -> `DA_HOAN_TIEN`.
-9. VietQR không thanh toán trong thời hạn cấu hình (mặc định 15 phút) tự hủy; đơn `CHO_XAC_NHAN` quá lâu được cảnh báo cho nhân viên.
+1. Khách chọn địa chỉ giao hàng trước khi xem thực đơn. Backend kiểm tra nhà hàng đang trong giờ nhận đơn và địa chỉ thuộc phạm vi giao.
+2. Backend tính phí giao hàng và thời gian nhận dự kiến. Nếu có Google Maps, ETA gồm thời gian chuẩn bị dự kiến + thời gian di chuyển; nếu chưa cấu hình Google Maps thì dùng thời gian giao dự phòng.
+3. Khách chọn món, nhập thông tin nhận hàng, ghi chú, mã khuyến mãi (nếu có) và phương thức thanh toán.
+4. Khi khách xác nhận, backend kiểm tra lần cuối: giờ nhận đơn, địa chỉ/phí giao, món còn bán, nguyên liệu đủ, giá từ database và khuyến mãi còn hợp lệ.
+5. COD hợp lệ được tạo và chuyển thẳng xuống bếp, không còn bước thu ngân duyệt đơn.
+6. VietQR hợp lệ được tạo ở `CHO_THANH_TOAN`; sau khi thanh toán được ghi nhận, backend kiểm tra lại nguyên liệu rồi chuyển thẳng xuống bếp.
+7. Khi bếp đã bắt đầu và gần đến thời điểm món dự kiến sẵn sàng, backend tự điều phối đối tác vận chuyển. Không còn dùng ngưỡng phần trăm số món hoàn thành.
+8. Chỉ khi toàn bộ món hoàn tất, đơn mới ở trạng thái sẵn sàng để bàn giao cho tài xế.
+9. Sau bàn giao, trạng thái giao hàng được cập nhật từ webhook đối tác. Bản demo có API mô phỏng webhook cho CASHIER/ADMIN.
+10. Đối tác báo giao thành công thì khách nhìn thấy ngay `HOAN_THANH`. Trạng thái `CHO_DOI_SOAT` chỉ còn là trạng thái nội bộ tương thích dữ liệu/kế toán và không xuất hiện trong hành trình khách.
+11. VietQR không thanh toán trong thời hạn cấu hình sẽ tự hủy. Nếu đơn đã thu tiền nhưng sau đó phải hủy/giảm tiền, hệ thống ghi nhận khoản cần hoàn như nghiệp vụ nội bộ.
+12. Sau khi giao thành công, khách có thể gửi đánh giá bằng mô-đun đánh giá hiện có hoặc liên hệ nhà hàng để được hỗ trợ.
 
-Không thêm vai trò `SHIPPER`; `DeliveryProviderService` vẫn là cổng tích hợp vận chuyển.
+Không thêm vai trò `SHIPPER`; `DeliveryProviderService` là cổng tích hợp/mô phỏng đối tác vận chuyển.
 
-## Trạng thái giao hàng
+## Trạng thái khách hàng nhìn thấy
 
 | Trạng thái | Ý nghĩa |
 |---|---|
-| `CHO_XAC_NHAN` | Khách vừa gửi đơn |
-| `CHO_THANH_TOAN` | Nhà hàng đã nhận đơn VietQR, đang chờ khách thanh toán |
-| `DANG_CHUAN_BI` | Đơn đã xuống bếp |
-| `CHO_TAI_XE_NHAN` | Toàn bộ món sẵn sàng, đã có tài xế/mã vận đơn |
-| `DANG_GIAO` | Đã bàn giao cho tài xế |
-| `CHO_DOI_SOAT` | Đối tác báo giao thành công, chờ thu ngân đối soát |
-| `HOAN_THANH` | Đã đối soát và tạo hóa đơn |
-| `GIAO_THAT_BAI` | Đối tác báo giao thất bại |
-| `DA_HUY` | Đơn bị hủy/từ chối/hết hạn |
+| `CHO_THANH_TOAN` | Chờ thanh toán VietQR |
+| `DANG_CHUAN_BI` | Đơn đã được chuyển xuống bếp |
+| `CHO_TAI_XE_NHAN` | Món đã sẵn sàng, chờ tài xế nhận |
+| `DANG_GIAO` | Tài xế đã nhận món và đang giao |
+| `HOAN_THANH` | Đã giao thành công |
+| `GIAO_THAT_BAI` | Giao không thành công |
+| `DA_HUY` | Đơn đã hủy |
+
+`CHO_DOI_SOAT` có thể còn tồn tại nội bộ để tương thích kế toán/dữ liệu cũ nhưng API tracking công khai ánh xạ thành `HOAN_THANH`.
 
 Trạng thái thanh toán gồm `CHO_THANH_TOAN`, `DA_THANH_TOAN`, `CHO_HOAN_TIEN`, `DA_HOAN_TIEN`, `HET_HAN`, `DA_HUY`.
 
 ## API công khai
 
-### Tính phí do backend quyết định
+### Kiểm tra địa chỉ, giờ nhận đơn, phí và ETA
 
 ```http
 POST /api/customer/delivery/quote
@@ -47,7 +50,7 @@ POST /api/customer/delivery/quote
 }
 ```
 
-Frontend không gửi `phiGiaoHang` hoặc `khuVucGiaoHang` khi tạo đơn.
+Frontend không tự quyết định `phiGiaoHang` hoặc `khuVucGiaoHang`. Nếu nhà hàng ngoài giờ nhận đơn hoặc địa chỉ ngoài phạm vi giao, backend từ chối ngay tại bước này.
 
 ### Tạo đơn
 
@@ -65,10 +68,13 @@ POST /api/customer/delivery/orders
   "quanHuyen": "Thanh Khê",
   "tinhThanh": "Đà Nẵng",
   "ghiChuGiaoHang": "Gọi trước khi đến",
+  "maCodeKhuyenMai": "LUMORA10",
   "phuongThucThanhToan": "VIETQR",
   "items": [{ "maMonAn": 5, "soLuong": 2, "ghiChu": "Không cay" }]
 }
 ```
+
+Backend luôn đọc giá món từ database, kiểm tra nguyên liệu và khóa/kiểm tra mã khuyến mãi tại thời điểm tạo đơn. Frontend chỉ hiển thị số tiền dự kiến.
 
 ### Tra cứu, VietQR và hủy
 
@@ -78,23 +84,25 @@ GET  /api/customer/delivery/orders/{trackingToken}/vietqr
 POST /api/customer/delivery/orders/{trackingToken}/cancel
 ```
 
-VietQR chỉ tạo khi đơn ở `CHO_THANH_TOAN`. Khách được tự hủy khi `CHO_XAC_NHAN`, hoặc khi `CHO_THANH_TOAN` nhưng chưa ghi nhận tiền.
+VietQR chỉ tạo khi đơn ở `CHO_THANH_TOAN`. Khách chỉ tự hủy đơn VietQR khi chưa thanh toán; đơn COD hợp lệ được chuyển thẳng xuống bếp nên cần liên hệ nhà hàng nếu có sự cố.
 
 ## API CASHIER/ADMIN
 
+Không còn API `confirm` hoặc `reject` đơn giao hàng trước khi xuống bếp.
+
 ```http
-POST /api/delivery-orders/{orderId}/confirm
-POST /api/delivery-orders/{orderId}/reject
 POST /api/delivery-orders/{orderId}/confirm-vietqr
 POST /api/delivery-orders/{orderId}/confirm-refund
 POST /api/delivery-orders/{orderId}/handover
 POST /api/delivery-orders/{orderId}/complete
 POST /api/delivery-orders/{orderId}/retry
+POST /api/delivery-orders/{orderId}/fail
+POST /api/delivery-orders/{orderId}/simulate-provider-result
 ```
 
-`confirm` không yêu cầu VietQR đã trả trước. Với VietQR, nó chỉ nhận đơn và mở bước thanh toán. `confirm-vietqr` mới chuyển đơn xuống bếp.
+`confirm-vietqr` là bước ghi nhận thanh toán trong bản demo; sau khi ghi nhận thành công, đơn được chuyển xuống bếp ngay. `complete` là bước hóa đơn/kế toán nội bộ sau khi đã giao thành công, không phải một trạng thái khách phải chờ.
 
-Admin có thể dùng API hủy món hiện có `POST /api/orders/items/{itemId}/cancel` cho đơn giao hàng trước khi bàn giao. Nếu VietQR đã thu tiền, backend tự tính khoản chênh lệch cần hoàn.
+Admin có thể dùng API hủy món hiện có cho đơn giao hàng trước khi bàn giao. Nếu VietQR đã thu tiền, backend tự tính khoản chênh lệch cần hoàn.
 
 ## Webhook vận chuyển
 
@@ -107,20 +115,14 @@ X-Delivery-Webhook-Token: <DELIVERY_PROVIDER_WEBHOOK_TOKEN>
 
 ```json
 {
-  "maVanDon": "GRAB-DEMO-...",
+  "maVanDon": "DELIVERY-DEMO-...",
   "trangThai": "GIAO_THANH_CONG",
   "lyDo": null,
   "eventId": "provider-event-001"
 }
 ```
 
-Endpoint public chỉ chấp nhận token cấu hình bằng biến môi trường. Mặc định token để trống nên webhook ngoài bị khóa. Trong giao diện demo, CASHIER/ADMIN có thể dùng:
-
-```http
-POST /api/delivery-orders/{orderId}/simulate-provider-result
-```
-
-để mô phỏng cùng luồng webhook mà không cần vai trò shipper.
+Endpoint public chỉ chấp nhận token cấu hình. Trong giao diện demo, CASHIER/ADMIN có thể dùng `simulate-provider-result` để mô phỏng cùng luồng webhook mà không cần vai trò shipper.
 
 ## Cấu hình
 
@@ -133,12 +135,17 @@ DELIVERY_SUPPORTED_CITY=Đà Nẵng
 DELIVERY_INNER_DISTRICTS=Thanh Khê,Hải Châu
 DELIVERY_NEARBY_DISTRICTS=Sơn Trà,Ngũ Hành Sơn,Cẩm Lệ,Liên Chiểu,Hòa Vang
 DELIVERY_PAYMENT_TIMEOUT_MINUTES=15
-DELIVERY_CONFIRMATION_WARNING_MINUTES=10
-DELIVERY_DRIVER_ASSIGNMENT_PROGRESS_PERCENT=70
+DELIVERY_PREPARATION_MINUTES=25
+DELIVERY_DRIVER_ASSIGNMENT_LEAD_MINUTES=8
+DELIVERY_FALLBACK_DELIVERY_MINUTES=20
 DELIVERY_PROVIDER_WEBHOOK_TOKEN=<secret>
 ```
 
-Cơ sở dữ liệu dùng `spring.jpa.hibernate.ddl-auto=update`; file `database/delivery_order_upgrade.sql` cũng đã được cập nhật để có thể nâng cấp PostgreSQL/Neon chủ động.
+- `DELIVERY_PREPARATION_MINUTES`: thời gian chuẩn bị món dự kiến dùng để tính ETA.
+- `DELIVERY_DRIVER_ASSIGNMENT_LEAD_MINUTES`: số phút trước thời điểm dự kiến món sẵn sàng để bắt đầu điều phối tài xế.
+- `DELIVERY_FALLBACK_DELIVERY_MINUTES`: thời gian giao dự phòng khi chưa có Routes API.
+
+Cơ sở dữ liệu dùng `spring.jpa.hibernate.ddl-auto=update`; file `database/delivery_order_upgrade.sql` cũng được giữ để nâng cấp PostgreSQL/Neon chủ động.
 
 ## Google Maps / tính phí theo quãng đường
 

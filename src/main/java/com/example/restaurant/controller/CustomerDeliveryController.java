@@ -31,12 +31,12 @@ public class CustomerDeliveryController {
         ));
     }
 
-    /** Khách từ xa đặt món; nhà hàng xác nhận khả năng phục vụ trước. */
+    /** Khách từ xa đặt món; backend tự kiểm tra điều kiện trước khi nhận đơn. */
     @PostMapping("/orders")
     public ResponseEntity<ApiResponse<DeliveryOrderCreateResponse>> createOrder(
             @Valid @RequestBody DeliveryOrderCreateRequest request) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Đặt món giao tận nơi thành công. Nhà hàng sẽ kiểm tra và xác nhận đơn",
+                "Đặt món giao tận nơi thành công",
                 deliveryOrderService.createOrder(request)
         ));
     }
@@ -51,7 +51,7 @@ public class CustomerDeliveryController {
         ));
     }
 
-    /** VietQR chỉ được tạo sau khi nhà hàng đã nhận đơn và chuyển đơn sang chờ thanh toán. */
+    /** VietQR được tạo cho đơn đã qua kiểm tra cuối và đang chờ thanh toán. */
     @GetMapping("/orders/{trackingToken}/vietqr")
     public ResponseEntity<ApiResponse<VietQrResponse>> vietQr(
             @PathVariable String trackingToken) {
@@ -61,7 +61,7 @@ public class CustomerDeliveryController {
         ));
     }
 
-    /** Khách có thể hủy trước khi bếp tiếp nhận, gồm cả giai đoạn chờ thanh toán VietQR. */
+    /** Khách chỉ tự hủy được đơn VietQR chưa thanh toán; COD hợp lệ được chuyển thẳng xuống bếp. */
     @PostMapping("/orders/{trackingToken}/cancel")
     public ResponseEntity<ApiResponse<DeliveryTrackingResponse>> cancel(
             @PathVariable String trackingToken,
