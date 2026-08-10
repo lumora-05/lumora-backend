@@ -32,19 +32,30 @@ public class GoogleMapsRouteService {
     }
 
     public RouteResult computeRouteToPlace(String placeId) {
+        if (!StringUtils.hasText(placeId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Google Place ID không hợp lệ");
+        }
+        return computeRoute(Map.of("placeId", placeId.trim()));
+    }
+
+    public RouteResult computeRouteToAddress(String address) {
+        if (!StringUtils.hasText(address)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Địa chỉ giao hàng không hợp lệ");
+        }
+        return computeRoute(Map.of("address", address.trim()));
+    }
+
+    private RouteResult computeRoute(Map<String, String> destination) {
         if (!isConfigured()) {
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
                     "Google Maps Routes API chưa được cấu hình ở backend"
             );
         }
-        if (!StringUtils.hasText(placeId)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Google Place ID không hợp lệ");
-        }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("origin", Map.of("address", properties.getOriginAddress().trim()));
-        body.put("destination", Map.of("placeId", placeId.trim()));
+        body.put("destination", destination);
         body.put("travelMode", "DRIVE");
         body.put("routingPreference", "TRAFFIC_AWARE");
         body.put("computeAlternativeRoutes", false);
@@ -69,7 +80,7 @@ public class GoogleMapsRouteService {
             if (routes == null || !routes.isArray() || routes.size() == 0) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
-                        "Google Maps không tìm thấy tuyến đường phù hợp tới địa chỉ đã chọn"
+                        "Google Maps không tìm thấy tuyến đường phù hợp tới địa chỉ giao hàng"
                 );
             }
 

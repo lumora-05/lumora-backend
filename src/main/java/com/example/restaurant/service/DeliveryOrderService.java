@@ -1065,8 +1065,28 @@ public class DeliveryOrderService {
                                                        String googlePlaceId,
                                                        String googleFormattedAddress) {
         String placeId = trimToNull(googlePlaceId);
-        if (placeId != null && googleMapsRouteService.isConfigured()) {
-            GoogleMapsRouteService.RouteResult route = googleMapsRouteService.computeRouteToPlace(placeId);
+        String cityText = trimToNull(city);
+        String districtText = trimToNull(district);
+        String wardText = trimToNull(ward);
+        String detailText = trimToNull(detailedAddress);
+        String fullAddress = trimToNull(googleFormattedAddress);
+        if (fullAddress == null) {
+            fullAddress = joinAddress(detailText, wardText, districtText, cityText);
+        }
+
+        // Khi Google Maps đã cấu hình, Place ID chỉ còn là lựa chọn tối ưu chứ không còn bắt buộc.
+        // Nếu khách chỉ nhập địa chỉ dạng chữ, Routes API vẫn có thể tự xác định điểm đến từ trường address.
+        if (googleMapsRouteService.isConfigured() && (placeId != null || StringUtils.hasText(fullAddress))) {
+            if (!StringUtils.hasText(fullAddress)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Địa chỉ giao hàng không hợp lệ");
+            }
+            if (placeId == null) {
+                validateTypedDeliveryAddress(fullAddress);
+            }
+
+            GoogleMapsRouteService.RouteResult route = placeId != null
+                    ? googleMapsRouteService.computeRouteToPlace(placeId)
+                    : googleMapsRouteService.computeRouteToAddress(fullAddress);
             double distanceKm = route.distanceMeters() / 1000.0d;
             double tier1 = positiveDoubleOrDefault(googleMapsProperties.getTier1DistanceKm(), 3.0d);
             double tier2 = positiveDoubleOrDefault(googleMapsProperties.getTier2DistanceKm(), 6.0d);
@@ -1098,17 +1118,6 @@ public class DeliveryOrderService {
                 fee = configuredFee(googleMapsProperties.getTier3Fee());
             }
 
-            String cityText = trimToNull(city);
-            String districtText = trimToNull(district);
-            String wardText = trimToNull(ward);
-            String detailText = trimToNull(detailedAddress);
-            String fullAddress = trimToNull(googleFormattedAddress);
-            if (fullAddress == null) {
-                fullAddress = joinAddress(detailText, wardText, districtText, cityText);
-            }
-            if (!StringUtils.hasText(fullAddress)) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Địa chỉ Google Maps không hợp lệ");
-            }
             return new DeliveryQuoteResponse(
                     cityText,
                     districtText,
@@ -1125,7 +1134,7 @@ public class DeliveryOrderService {
             );
         }
 
-        // Fallback giữ nguyên nghiệp vụ cũ khi chưa cấu hình Google Maps hoặc trình duyệt không dùng Places.
+        // Fallback giữ nguyên nghiệp vụ cũ khi backend chưa cấu hình Google Maps.
         String normalizedCity = normalizeLocationKey(requiredText(city, "Tỉnh/thành phố không hợp lệ"));
         String supportedCity = normalizeLocationKey(
                 StringUtils.hasText(deliveryProperties.getSupportedCity())
@@ -1139,7 +1148,7 @@ public class DeliveryOrderService {
             );
         }
 
-        String districtText = requiredText(district, "Quận/huyện không hợp lệ");
+        districtText = requiredText(district, "Quận/huyện không hợp lệ");
         String area;
         String areaLabel;
         BigDecimal fee;
@@ -1158,11 +1167,8 @@ public class DeliveryOrderService {
             );
         }
 
-        String cityText = requiredText(city, "Tỉnh/thành phố không hợp lệ");
-        String wardText = trimToNull(ward);
-        String detailText = trimToNull(detailedAddress);
-        String fullAddress = trimToNull(googleFormattedAddress);
-        if (fullAddress == null) {
+        cityText = requiredText(city, "Tỉnh/thành phố không hợp lệ");
+        if (!StringUtils.hasText(fullAddress)) {
             fullAddress = joinAddress(detailText, wardText, districtText, cityText);
         }
         return new DeliveryQuoteResponse(
@@ -1179,6 +1185,22 @@ public class DeliveryOrderService {
                 null,
                 null
         );
+    }
+
+    private void validateTypedDeliveryAddress(String fullAddress) {
+        String normalized = normalizeLocationKey(fullAddress);
+        int wordCount = normalized.isBlank() ? 0 : normalized.split("\\s+").length;
+        boolean hasNumber = fullAddress.chars().anyMatch(Character::isDigit);
+        long commaCount = fullAddress.chars().filter(ch -> ch == ',').count();
+
+        // Tránh trường hợp khách chỉ gõ tên tỉnh/thành hoặc khu vực rất rộng như "Đà Nẵng".
+        // Vẫn cho phép địa chỉ không có số nhà nếu là tên địa điểm đủ cụ thể.
+        if (wordCount < 3 || (!hasNumber && commaCount < 2 && wordCount < 5)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Vui lòng nhập địa chỉ cụ thể hơn (số nhà, tên đường, phường/xã...) để tính phí giao hàng"
+            );
+        }
     }
 
     private double positiveDoubleOrDefault(Double value, double fallback) {
