@@ -3,7 +3,7 @@
 ## Luồng nghiệp vụ hiện tại
 
 1. Khách chọn địa chỉ giao hàng trước khi xem thực đơn. Backend kiểm tra nhà hàng đang trong giờ nhận đơn và địa chỉ thuộc phạm vi giao.
-2. Backend tính phí giao hàng và thời gian nhận dự kiến. Nếu có Google Maps, ETA gồm thời gian chuẩn bị dự kiến + thời gian di chuyển; nếu chưa cấu hình Google Maps thì dùng thời gian giao dự phòng.
+2. Backend tính phí giao hàng và thời gian nhận dự kiến. Nếu có openrouteservice, ETA gồm thời gian chuẩn bị dự kiến + thời gian di chuyển; nếu chưa cấu hình dịch vụ bản đồ thì dùng thời gian giao dự phòng.
 3. Khách chọn món, nhập thông tin nhận hàng, ghi chú, mã khuyến mãi (nếu có) và phương thức thanh toán.
 4. Khi khách xác nhận, backend kiểm tra lần cuối: giờ nhận đơn, địa chỉ/phí giao, món còn bán, nguyên liệu đủ, giá từ database và khuyến mãi còn hợp lệ.
 5. COD hợp lệ được tạo và chuyển thẳng xuống bếp, không còn bước thu ngân duyệt đơn.
@@ -147,8 +147,8 @@ DELIVERY_PROVIDER_WEBHOOK_TOKEN=<secret>
 
 Cơ sở dữ liệu dùng `spring.jpa.hibernate.ddl-auto=update`; file `database/delivery_order_upgrade.sql` cũng được giữ để nâng cấp PostgreSQL/Neon chủ động.
 
-## Google Maps / tính phí theo quãng đường
+## OpenStreetMap + openrouteservice / tính phí theo quãng đường
 
 Luồng giao hàng hỗ trợ Google Places + Routes API. Khi frontend gửi `googlePlaceId`, backend gọi Routes API để tính lại quãng đường từ LUMORA tới khách và tự quyết định phí; frontend không được gửi số tiền phí giao hàng.
 
-Cấu hình chi tiết xem `GOOGLE_MAPS_DELIVERY_SETUP.md`. Nếu chưa có `GOOGLE_MAPS_SERVER_API_KEY`, backend giữ cơ chế quận/huyện cũ làm fallback để không làm gián đoạn demo.
+Cấu hình chi tiết xem `OPEN_MAP_DELIVERY_SETUP.md`. Nếu chưa có `OPENROUTESERVICE_API_KEY`, backend giữ cơ chế quận/huyện cũ làm fallback để không làm gián đoạn demo.

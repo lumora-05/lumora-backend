@@ -1,3 +1,9 @@
+# [Không còn sử dụng] Google Maps cho giao hàng
+
+Luồng giao hàng đã chuyển sang OpenStreetMap + openrouteservice. Xem `OPEN_MAP_DELIVERY_SETUP.md`.
+
+---
+
 # Google Maps cho đặt món giao tận nơi
 
 ## Luồng mới

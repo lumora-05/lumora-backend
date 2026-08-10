@@ -1,7 +1,7 @@
 package com.example.restaurant.service;
 
 import com.example.restaurant.config.DeliveryProperties;
-import com.example.restaurant.config.GoogleMapsProperties;
+import com.example.restaurant.config.OpenRouteServiceProperties;
 import com.example.restaurant.config.RestaurantInfoProperties;
 import com.example.restaurant.dto.DeliveryHandoverRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateRequest;
@@ -89,9 +89,9 @@ public class DeliveryOrderService {
     private final PromotionService promotionService;
     private final PaymentService paymentService;
     private final DeliveryProperties deliveryProperties;
-    private final GoogleMapsProperties googleMapsProperties;
+    private final OpenRouteServiceProperties openRouteServiceProperties;
     private final RestaurantInfoProperties restaurantInfoProperties;
-    private final GoogleMapsRouteService googleMapsRouteService;
+    private final OpenRouteService openRouteService;
     private final DeliveryProviderService deliveryProviderService;
     private final FoodTraceabilityService foodTraceabilityService;
     private final RealtimeNotificationService realtimeNotificationService;
@@ -106,9 +106,9 @@ public class DeliveryOrderService {
             PromotionService promotionService,
             PaymentService paymentService,
             DeliveryProperties deliveryProperties,
-            GoogleMapsProperties googleMapsProperties,
+            OpenRouteServiceProperties openRouteServiceProperties,
             RestaurantInfoProperties restaurantInfoProperties,
-            GoogleMapsRouteService googleMapsRouteService,
+            OpenRouteService openRouteService,
             DeliveryProviderService deliveryProviderService,
             FoodTraceabilityService foodTraceabilityService,
             RealtimeNotificationService realtimeNotificationService,
@@ -122,9 +122,9 @@ public class DeliveryOrderService {
         this.promotionService = promotionService;
         this.paymentService = paymentService;
         this.deliveryProperties = deliveryProperties;
-        this.googleMapsProperties = googleMapsProperties;
+        this.openRouteServiceProperties = openRouteServiceProperties;
         this.restaurantInfoProperties = restaurantInfoProperties;
-        this.googleMapsRouteService = googleMapsRouteService;
+        this.openRouteService = openRouteService;
         this.deliveryProviderService = deliveryProviderService;
         this.foodTraceabilityService = foodTraceabilityService;
         this.realtimeNotificationService = realtimeNotificationService;
@@ -995,46 +995,42 @@ public class DeliveryOrderService {
             String district,
             String ward,
             String detailedAddress,
-            String googlePlaceId,
-            String googleFormattedAddress) {
-        String placeId = trimToNull(googlePlaceId);
+            String legacyPlaceId,
+            String legacyFormattedAddress) {
         String cityText = trimToNull(city);
         String districtText = trimToNull(district);
         String wardText = trimToNull(ward);
         String detailText = trimToNull(detailedAddress);
-        String fullAddress = trimToNull(googleFormattedAddress);
+        String fullAddress = trimToNull(legacyFormattedAddress);
         if (fullAddress == null) {
             fullAddress = joinAddress(detailText, wardText, districtText, cityText);
         }
 
-        // Khi Google Maps đã cấu hình, Place ID chỉ còn là lựa chọn tối ưu chứ không
-        // còn bắt buộc.
-        // Nếu khách chỉ nhập địa chỉ dạng chữ, Routes API vẫn có thể tự xác định điểm
-        // đến từ trường address.
-        if (googleMapsRouteService.isConfigured() && (placeId != null || StringUtils.hasText(fullAddress))) {
-            if (!StringUtils.hasText(fullAddress)) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Địa chỉ giao hàng không hợp lệ");
-            }
-            if (placeId == null) {
-                validateTypedDeliveryAddress(fullAddress);
-            }
-
-            GoogleMapsRouteService.RouteResult route = placeId != null
-                    ? googleMapsRouteService.computeRouteToPlace(placeId)
-                    : googleMapsRouteService.computeRouteToAddress(fullAddress);
+        // Bản đồ miễn phí: backend tự geocode địa chỉ và tính tuyến đường bằng
+        // openrouteservice (dữ liệu OpenStreetMap). Trình duyệt không cần API key.
+        if (openRouteService.isConfigured() && StringUtils.hasText(fullAddress)) {
+            validateTypedDeliveryAddress(fullAddress);
+            OpenRouteService.RouteResult route = openRouteService.computeRouteToAddress(fullAddress);
             double distanceKm = route.distanceMeters() / 1000.0d;
-            double tier1 = positiveDoubleOrDefault(googleMapsProperties.getTier1DistanceKm(), 3.0d);
-            double tier2 = positiveDoubleOrDefault(googleMapsProperties.getTier2DistanceKm(), 6.0d);
-            double max = positiveDoubleOrDefault(googleMapsProperties.getMaxDeliveryDistanceKm(), 10.0d);
+            double tier1 = positiveDoubleOrDefault(openRouteServiceProperties.getTier1DistanceKm(), 3.0d);
+            double tier2 = positiveDoubleOrDefault(openRouteServiceProperties.getTier2DistanceKm(), 6.0d);
+            double max = positiveDoubleOrDefault(openRouteServiceProperties.getMaxDeliveryDistanceKm(), 10.0d);
             if (tier2 < tier1 || max < tier2) {
-                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
-                        "Cấu hình bán kính giao hàng Google Maps không hợp lệ");
+                throw new ResponseStatusException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Cấu hình bán kính giao hàng openrouteservice không hợp lệ"
+                );
             }
             if (distanceKm > max) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
-                        String.format(Locale.ROOT, "Địa chỉ cách nhà hàng %.1f km, vượt phạm vi giao tối đa %.1f km",
-                                distanceKm, max));
+                        String.format(
+                                Locale.ROOT,
+                                "Địa chỉ cách nhà hàng %.1f km, vượt phạm vi giao tối đa %.1f km",
+                                distanceKm,
+                                max
+                        )
+                );
             }
 
             String area;
@@ -1043,15 +1039,15 @@ public class DeliveryOrderService {
             if (distanceKm <= tier1) {
                 area = AREA_RADIUS_3;
                 areaLabel = String.format(Locale.ROOT, "Trong %.0f km", tier1);
-                fee = configuredFee(googleMapsProperties.getTier1Fee());
+                fee = configuredFee(openRouteServiceProperties.getTier1Fee());
             } else if (distanceKm <= tier2) {
                 area = AREA_RADIUS_6;
                 areaLabel = String.format(Locale.ROOT, "Từ %.0f đến %.0f km", tier1, tier2);
-                fee = configuredFee(googleMapsProperties.getTier2Fee());
+                fee = configuredFee(openRouteServiceProperties.getTier2Fee());
             } else {
                 area = AREA_RADIUS_10;
                 areaLabel = String.format(Locale.ROOT, "Từ %.0f đến %.0f km", tier2, max);
-                fee = configuredFee(googleMapsProperties.getTier3Fee());
+                fee = configuredFee(openRouteServiceProperties.getTier3Fee());
             }
 
             return new DeliveryQuoteResponse(
@@ -1061,28 +1057,37 @@ public class DeliveryOrderService {
                     area,
                     areaLabel,
                     fee,
-                    fullAddress,
-                    true,
-                    placeId,
+                    StringUtils.hasText(route.resolvedAddress()) ? route.resolvedAddress() : fullAddress,
+                    false, // legacy field googleMaps: không dùng Google Maps nữa
+                    null,
                     route.distanceMeters(),
                     route.durationSeconds(),
                     estimatedCustomerEtaSeconds(route.durationSeconds()),
-                    route.encodedPolyline());
+                    route.routeGeometry()
+            );
         }
 
-        // Fallback giữ nguyên nghiệp vụ cũ khi backend chưa cấu hình Google Maps.
+        // Fallback giữ nguyên nghiệp vụ cũ nếu chưa cấu hình OPENROUTESERVICE_API_KEY.
         String normalizedCity = normalizeLocationKey(requiredText(city, "Tỉnh/thành phố không hợp lệ"));
         String supportedCity = normalizeLocationKey(
                 StringUtils.hasText(deliveryProperties.getSupportedCity())
                         ? deliveryProperties.getSupportedCity()
-                        : "Đà Nẵng");
+                        : "Đà Nẵng"
+        );
         if (!normalizedCity.equals(supportedCity)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Hiện tại nhà hàng chỉ hỗ trợ giao hàng trong " + deliveryProperties.getSupportedCity());
+                    "Hiện tại nhà hàng chỉ hỗ trợ giao hàng trong " + deliveryProperties.getSupportedCity()
+            );
         }
 
-        districtText = requiredText(district, "Quận/huyện không hợp lệ");
+        if (!StringUtils.hasText(districtText)) {
+            districtText = inferDistrictFromAddress(fullAddress);
+        }
+        districtText = requiredText(
+                districtText,
+                "Không xác định được quận/huyện. Vui lòng nhập thêm quận/huyện vào địa chỉ giao hàng"
+        );
         String area;
         String areaLabel;
         BigDecimal fee;
@@ -1097,7 +1102,8 @@ public class DeliveryOrderService {
         } else {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Khu vực " + districtText + " hiện chưa nằm trong phạm vi giao hàng của nhà hàng");
+                    "Khu vực " + districtText + " hiện chưa nằm trong phạm vi giao hàng của nhà hàng"
+            );
         }
 
         cityText = requiredText(city, "Tỉnh/thành phố không hợp lệ");
@@ -1117,10 +1123,9 @@ public class DeliveryOrderService {
                 null,
                 null,
                 estimatedCustomerEtaSeconds(null),
-                null);
+                null
+        );
     }
-
-    <<<<<<<HEAD
 
     private void validateTypedDeliveryAddress(String fullAddress) {
         String normalized = normalizeLocationKey(fullAddress);
@@ -1134,7 +1139,9 @@ public class DeliveryOrderService {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Vui lòng nhập địa chỉ cụ thể hơn (số nhà, tên đường, phường/xã...) để tính phí giao hàng"
-=======
+            );
+        }
+    }
 
     private void ensureRestaurantAcceptingOrders() {
         LocalDateTime now = LocalDateTime.now(ZoneId.of("Asia/Ho_Chi_Minh"));
@@ -1147,12 +1154,9 @@ public class DeliveryOrderService {
                     HttpStatus.CONFLICT,
                     "Nhà hàng hiện ngoài giờ nhận đơn. Giờ hoạt động: "
                             + restaurantInfoProperties.getOpeningHours()
->>>>>>> 6e91d5b1755dfafc073043ee8b715a0af536c368
             );
         }
     }
-
-    <<<<<<<HEAD=======
 
     private long estimatedCustomerEtaSeconds(Long routeDurationSeconds) {
         long preparationSeconds = positiveOrDefault(deliveryProperties.getPreparationMinutes(), 25) * 60L;
@@ -1172,7 +1176,8 @@ public class DeliveryOrderService {
         int preparationMinutes = positiveOrDefault(deliveryProperties.getPreparationMinutes(), 25);
         int leadMinutes = Math.min(
                 preparationMinutes,
-                positiveOrDefault(deliveryProperties.getDriverAssignmentLeadMinutes(), 8));
+                positiveOrDefault(deliveryProperties.getDriverAssignmentLeadMinutes(), 8)
+        );
         LocalDateTime dispatchAt = acceptedAt.plusMinutes(preparationMinutes - leadMinutes);
         return !LocalDateTime.now().isBefore(dispatchAt);
     }
@@ -1180,8 +1185,8 @@ public class DeliveryOrderService {
     private boolean hasKitchenStarted(Order order) {
         return order != null && order.getChiTietDonHang() != null
                 && order.getChiTietDonHang().stream()
-                        .filter(item -> !"DA_HUY".equals(normalize(item.getTrangThaiMon())))
-                        .anyMatch(item -> !"CHO_BEP".equals(normalize(item.getTrangThaiMon())));
+                .filter(item -> !"DA_HUY".equals(normalize(item.getTrangThaiMon())))
+                .anyMatch(item -> !"CHO_BEP".equals(normalize(item.getTrangThaiMon())));
     }
 
     private String publicDeliveryStatus(String status) {
@@ -1198,8 +1203,6 @@ public class DeliveryOrderService {
         return normalized;
     }
 
-    >>>>>>>6e91d 5 b1755dfafc073043ee8b715a0af536c368
-
     private double positiveDoubleOrDefault(Double value, double fallback) {
         return value == null || value <= 0d ? fallback : value;
     }
@@ -1210,6 +1213,19 @@ public class DeliveryOrderService {
                     "Phí giao hàng chưa được cấu hình hợp lệ");
         }
         return money(value);
+    }
+
+    private String inferDistrictFromAddress(String fullAddress) {
+        if (!StringUtils.hasText(fullAddress)) return null;
+        String normalizedAddress = normalizeLocationKey(fullAddress);
+        List<String> candidates = new java.util.ArrayList<>();
+        if (deliveryProperties.getInnerDistricts() != null) candidates.addAll(deliveryProperties.getInnerDistricts());
+        if (deliveryProperties.getNearbyDistricts() != null) candidates.addAll(deliveryProperties.getNearbyDistricts());
+        return candidates.stream()
+                .filter(StringUtils::hasText)
+                .filter(candidate -> normalizedAddress.contains(normalizeDistrictKey(candidate)))
+                .findFirst()
+                .orElse(null);
     }
 
     private boolean matchesConfiguredLocation(List<String> configuredLocations, String input) {

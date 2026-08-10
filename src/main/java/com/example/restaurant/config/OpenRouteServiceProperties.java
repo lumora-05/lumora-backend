@@ -10,18 +10,19 @@ import java.math.BigDecimal;
 @Getter
 @Setter
 @Component
-@ConfigurationProperties(prefix = "app.google-maps")
-public class GoogleMapsProperties {
-    /** Bật/tắt tích hợp Google Maps cho luồng giao hàng. */
+@ConfigurationProperties(prefix = "app.open-route-service")
+public class OpenRouteServiceProperties {
+    /** Bật/tắt định vị và tính tuyến đường miễn phí bằng openrouteservice + OpenStreetMap. */
     private Boolean enabled = true;
-    /** API key chỉ dùng ở backend cho Routes API, không gửi xuống trình duyệt. */
-    private String serverApiKey = "";
-    private String routesUrl = "https://routes.googleapis.com/directions/v2:computeRoutes";
+    /** API key Standard 0€ của openrouteservice/HeiGIT, chỉ dùng ở backend. */
+    private String apiKey = "";
+    private String directionsUrl = "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson";
+    private String geocodeUrl = "https://api.heigit.org/pelias/v1/search";
     private String originAddress = "139 Nguyễn Thị Thập, Thanh Khê, Đà Nẵng, Việt Nam";
-    private String regionCode = "vn";
+    private String countryCode = "VN";
     private String languageCode = "vi";
 
-    /** Bảng phí giao theo quãng đường thực tế Google Routes. */
+    /** Bảng phí giao theo quãng đường đường bộ do openrouteservice trả về. */
     private Double tier1DistanceKm = 3.0;
     private Double tier2DistanceKm = 6.0;
     private Double maxDeliveryDistanceKm = 10.0;
