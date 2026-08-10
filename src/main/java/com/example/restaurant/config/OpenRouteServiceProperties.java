@@ -18,15 +18,6 @@ public class OpenRouteServiceProperties {
     private String apiKey = "";
     private String directionsUrl = "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson";
     private String geocodeUrl = "https://api.heigit.org/pelias/v1/search";
-    /** Tọa độ cố định của nhà hàng, dùng làm điểm xuất phát tính tuyến đường. */
-    private Double originLatitude = 16.075733;
-    private Double originLongitude = 108.169949;
-
-    /**
-     * Giữ lại địa chỉ gốc để tương thích cấu hình cũ/tham chiếu,
-     * nhưng không còn dùng để geocode điểm xuất phát.
-     */
-    private String originAddress = "139 Nguyễn Thị Thập, Thanh Khê, Đà Nẵng, Việt Nam";
     private String countryCode = "VN";
     private String languageCode = "vi";
 

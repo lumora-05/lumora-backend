@@ -1,6 +1,7 @@
 package com.example.restaurant.service;
 
 import com.example.restaurant.config.OpenRouteServiceProperties;
+import com.example.restaurant.config.RestaurantInfoProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -22,11 +23,21 @@ import java.util.Set;
 public class OpenRouteService {
 
     private final OpenRouteServiceProperties properties;
+    private final RestaurantInfoProperties restaurantInfoProperties;
     private final RestClient restClient;
-    private volatile Coordinate originCache;
 
-    public OpenRouteService(OpenRouteServiceProperties properties) {
+    /**
+     * Cache tọa độ nhà hàng theo chính địa chỉ đang có trong Cài đặt hệ thống.
+     * Khi admin đổi địa chỉ, key cache thay đổi và vị trí được geocode lại tự động.
+     */
+    private volatile Coordinate originCache;
+    private volatile String originCacheAddress;
+
+    public OpenRouteService(
+            OpenRouteServiceProperties properties,
+            RestaurantInfoProperties restaurantInfoProperties) {
         this.properties = properties;
+        this.restaurantInfoProperties = restaurantInfoProperties;
         this.restClient = RestClient.create();
     }
 
@@ -34,8 +45,7 @@ public class OpenRouteService {
         return Boolean.TRUE.equals(properties.getEnabled())
                 && StringUtils.hasText(properties.getApiKey())
                 && StringUtils.hasText(properties.getDirectionsUrl())
-                && StringUtils.hasText(properties.getGeocodeUrl())
-                && isValidOriginCoordinate();
+                && StringUtils.hasText(properties.getGeocodeUrl());
     }
 
     public RouteResult computeRouteToAddress(String address) {
@@ -51,12 +61,10 @@ public class OpenRouteService {
                     "openrouteservice chưa được cấu hình ở backend");
         }
 
-        // Xác định vị trí nhà hàng trước. Nếu lỗi phải báo đúng là lỗi vị trí nhà hàng,
-        // không được làm người dùng hiểu nhầm địa chỉ giao hàng bị sai.
+        // Luôn lấy điểm xuất phát từ địa chỉ nhà hàng hiện tại trong Cài đặt hệ thống.
         Coordinate origin = originCoordinate();
 
-        // Ưu tiên kết quả geocode gần nhà hàng để giảm khả năng chọn nhầm địa danh
-        // trùng tên ở tỉnh/thành khác.
+        // Ưu tiên kết quả địa chỉ khách gần nhà hàng để tránh nhầm địa danh trùng tên.
         GeocodeResult destination = geocodeDeliveryAddress(address.trim(), origin);
 
         Map<String, Object> body = Map.of(
@@ -113,47 +121,44 @@ public class OpenRouteService {
     }
 
     /**
-     * Tọa độ nhà hàng là dữ liệu cố định trong cấu hình.
-     *
-     * Không geocode địa chỉ nhà hàng ở runtime nữa vì đây là một điểm cố định;
-     * cách này ổn định hơn và cũng không tốn lượt Geocoding API cho điểm xuất phát.
+     * Lấy địa chỉ nhà hàng từ RestaurantInfoProperties.
+     * SystemSettingService đồng bộ trường này từ bảng cai_dat_he_thong khi khởi động
+     * và ngay sau khi admin lưu Cài đặt hệ thống.
      */
     private Coordinate originCoordinate() {
+        String configuredAddress = currentRestaurantAddress();
+
         Coordinate cached = originCache;
-        if (cached != null) {
+        String cachedAddress = originCacheAddress;
+        if (cached != null && configuredAddress.equals(cachedAddress)) {
             return cached;
         }
 
         synchronized (this) {
-            if (originCache == null) {
-                if (!isValidOriginCoordinate()) {
-                    throw new ResponseStatusException(
-                            HttpStatus.SERVICE_UNAVAILABLE,
-                            "Tọa độ nhà hàng chưa được cấu hình hợp lệ. "
-                                    + "Vui lòng kiểm tra app.open-route-service.origin-latitude "
-                                    + "và app.open-route-service.origin-longitude");
-                }
-
-                originCache = new Coordinate(
-                        properties.getOriginLongitude(),
-                        properties.getOriginLatitude());
+            // Đọc lại trong synchronized để nếu admin vừa cập nhật địa chỉ thì dùng bản mới nhất.
+            configuredAddress = currentRestaurantAddress();
+            if (originCache == null || !configuredAddress.equals(originCacheAddress)) {
+                GeocodeResult origin = geocodeWithFallback(
+                        configuredAddress,
+                        null,
+                        GeocodeTarget.RESTAURANT);
+                originCache = origin.coordinate();
+                originCacheAddress = configuredAddress;
             }
             return originCache;
         }
     }
 
-    private boolean isValidOriginCoordinate() {
-        Double latitude = properties.getOriginLatitude();
-        Double longitude = properties.getOriginLongitude();
-
-        return latitude != null
-                && longitude != null
-                && Double.isFinite(latitude)
-                && Double.isFinite(longitude)
-                && latitude >= -90d
-                && latitude <= 90d
-                && longitude >= -180d
-                && longitude <= 180d;
+    private String currentRestaurantAddress() {
+        String address = cleanupSpaces(restaurantInfoProperties.getAddress());
+        if (!StringUtils.hasText(address)
+                || "chưa cập nhật".equalsIgnoreCase(address)
+                || "chua cap nhat".equalsIgnoreCase(removeVietnameseDiacritics(address))) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Địa chỉ nhà hàng chưa được cấu hình trong Cài đặt hệ thống");
+        }
+        return address;
     }
 
     /**
@@ -166,11 +171,11 @@ public class OpenRouteService {
     /**
      * Thử nhiều cách viết của cùng một địa chỉ.
      *
-     * Quan trọng:
-     * - Không bỏ số nhà, vì bỏ số nhà có thể khiến phí giao bị tính từ giữa con
-     * đường.
-     * - Chỉ chuẩn hóa các phần dễ làm Pelias khó nhận diện như từ "Đường",
-     * hậu tố Việt Nam và dấu tiếng Việt.
+     * Với địa chỉ đầy đủ nhưng Pelias chỉ trả kết quả quá chung như "Đà Nẵng, Việt Nam",
+     * kết quả đó bị bỏ qua để thử candidate tiếp theo, ví dụ:
+     * 137 Đường Nguyễn Thị Thập, Thanh Khê, Đà Nẵng
+     * -> 137 Đường Nguyễn Thị Thập, Đà Nẵng
+     * -> 137 Đường Nguyễn Thị Thập
      */
     private GeocodeResult geocodeWithFallback(
             String address,
@@ -193,54 +198,42 @@ public class OpenRouteService {
     }
 
     /**
-     * Sinh các biến thể tìm kiếm theo thứ tự ưu tiên.
+     * Sinh các biến thể tìm kiếm theo thứ tự ưu tiên, vẫn giữ số nhà.
      */
     private Set<String> buildAddressCandidates(String rawAddress) {
         LinkedHashSet<String> candidates = new LinkedHashSet<>();
 
         String original = cleanupSpaces(rawAddress);
-        addCandidate(candidates, original);
-
-        // Ví dụ:
-        // "137 Đường Nguyễn Thị Thập, Thanh Khê, Đà Nẵng"
-        // -> "137 Nguyễn Thị Thập, Thanh Khê, Đà Nẵng"
         String withoutRoadWord = cleanupSpaces(
                 original.replaceAll("(?iu)\\bđường\\s+", ""));
-        addCandidate(candidates, withoutRoadWord);
 
-        /*
-         * Nếu dữ liệu địa giới trên bản đồ chưa kịp cập nhật (ví dụ phường/quận đổi tên),
-         * vẫn thử giữ nguyên số nhà + tên đường và thành phố.
-         *
-         * Ví dụ:
-         * "137 Nguyễn Thị Thập, Thanh Khê, Đà Nẵng"
-         * -> "137 Nguyễn Thị Thập, Đà Nẵng"
-         */
         String cityFallback = keepStreetAndCity(original);
         String cityFallbackWithoutRoadWord = keepStreetAndCity(withoutRoadWord);
+
+        // Quan trọng cho trường hợp người dùng nhập đầy đủ nhưng dữ liệu địa giới
+        // của OSM/Pelias chưa đồng nhất: thử lại đúng số nhà + tên đường.
+        String streetOnly = keepStreetOnly(original);
+        String streetOnlyWithoutRoadWord = keepStreetOnly(withoutRoadWord);
+
+        addCandidate(candidates, original);
+        addCandidate(candidates, withoutRoadWord);
         addCandidate(candidates, cityFallback);
         addCandidate(candidates, cityFallbackWithoutRoadWord);
+        addCandidate(candidates, streetOnly);
+        addCandidate(candidates, streetOnlyWithoutRoadWord);
 
-        // Thêm quốc gia để Pelias có thêm ngữ cảnh.
         addCandidate(candidates, appendVietnam(original));
         addCandidate(candidates, appendVietnam(withoutRoadWord));
         addCandidate(candidates, appendVietnam(cityFallback));
         addCandidate(candidates, appendVietnam(cityFallbackWithoutRoadWord));
+        addCandidate(candidates, appendVietnam(streetOnly));
+        addCandidate(candidates, appendVietnam(streetOnlyWithoutRoadWord));
 
-        // Cuối cùng mới thử bản không dấu, vẫn giữ nguyên số nhà và khu vực.
-        String ascii = removeVietnameseDiacritics(original);
-        String asciiWithoutRoadWord = removeVietnameseDiacritics(withoutRoadWord);
-        String asciiCityFallback = removeVietnameseDiacritics(cityFallback);
-        String asciiCityFallbackWithoutRoadWord = removeVietnameseDiacritics(cityFallbackWithoutRoadWord);
-
-        addCandidate(candidates, ascii);
-        addCandidate(candidates, asciiWithoutRoadWord);
-        addCandidate(candidates, asciiCityFallback);
-        addCandidate(candidates, asciiCityFallbackWithoutRoadWord);
-        addCandidate(candidates, appendVietnam(ascii));
-        addCandidate(candidates, appendVietnam(asciiWithoutRoadWord));
-        addCandidate(candidates, appendVietnam(asciiCityFallback));
-        addCandidate(candidates, appendVietnam(asciiCityFallbackWithoutRoadWord));
+        // Cuối cùng mới thử bản không dấu.
+        Set<String> current = new LinkedHashSet<>(candidates);
+        for (String candidate : current) {
+            addCandidate(candidates, removeVietnameseDiacritics(candidate));
+        }
 
         return candidates;
     }
@@ -251,7 +244,7 @@ public class OpenRouteService {
         }
 
         String[] parts = address.split(",");
-        if (parts.length < 3) {
+        if (parts.length < 2) {
             return address;
         }
 
@@ -263,6 +256,18 @@ public class OpenRouteService {
         }
 
         return street + ", " + city;
+    }
+
+    private String keepStreetOnly(String address) {
+        if (!StringUtils.hasText(address)) {
+            return address;
+        }
+
+        int commaIndex = address.indexOf(',');
+        if (commaIndex < 0) {
+            return cleanupSpaces(address);
+        }
+        return cleanupSpaces(address.substring(0, commaIndex));
     }
 
     private void addCandidate(Set<String> candidates, String value) {
@@ -303,7 +308,6 @@ public class OpenRouteService {
         String normalized = Normalizer.normalize(value, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}+", "");
 
-        // Chữ đ/Đ không bị loại bởi NFD.
         return normalized
                 .replace('đ', 'd')
                 .replace('Đ', 'D');
@@ -311,14 +315,12 @@ public class OpenRouteService {
 
     /**
      * Gọi Pelias một lần cho một candidate.
-     * Trả null nếu không có kết quả để caller thử candidate tiếp theo.
+     * Kết quả hành chính quá chung (city/region/country...) không được dùng làm điểm giao.
      */
     private GeocodeResult tryGeocode(String address, Coordinate focusPoint) {
         UriComponentsBuilder builder = UriComponentsBuilder
                 .fromUriString(properties.getGeocodeUrl().trim())
                 .queryParam("text", address)
-                // Lấy vài kết quả thay vì đúng 1 kết quả để Pelias có khả năng
-                // xếp hạng tốt hơn khi có focus point.
                 .queryParam("size", 5)
                 .queryParam(
                         "boundary.country",
@@ -353,8 +355,11 @@ public class OpenRouteService {
                 return null;
             }
 
-            // Pelias đã xếp hạng kết quả; focus point giúp ưu tiên địa điểm gần nhà hàng.
             for (JsonNode feature : features) {
+                if (isTooCoarse(feature)) {
+                    continue;
+                }
+
                 GeocodeResult parsed = parseFeature(feature, address);
                 if (parsed != null) {
                     return parsed;
@@ -371,6 +376,25 @@ public class OpenRouteService {
         }
     }
 
+    /**
+     * Không cho phép một kết quả chỉ là thành phố/quận/tỉnh/quốc gia trở thành
+     * tọa độ nhà hàng hoặc tọa độ giao hàng.
+     */
+    private boolean isTooCoarse(JsonNode feature) {
+        JsonNode propertiesNode = feature.path("properties");
+        String layer = propertiesNode.path("layer").asText("").trim().toLowerCase();
+
+        if (!StringUtils.hasText(layer)) {
+            return false;
+        }
+
+        return switch (layer) {
+            case "country", "macroregion", "region", "macrocounty", "county",
+                    "localadmin", "locality", "borough", "neighbourhood" -> true;
+            default -> false;
+        };
+    }
+
     private GeocodeResult parseFeature(JsonNode feature, String fallbackAddress) {
         JsonNode coordinates = feature.path("geometry").path("coordinates");
         if (!coordinates.isArray() || coordinates.size() < 2) {
@@ -385,7 +409,6 @@ public class OpenRouteService {
         }
 
         JsonNode propertiesNode = feature.path("properties");
-
         String label = propertiesNode.path("label").asText("");
         if (!StringUtils.hasText(label)) {
             label = propertiesNode.path("name").asText("");
@@ -400,13 +423,21 @@ public class OpenRouteService {
     }
 
     private ResponseStatusException geocodeNotFound(GeocodeTarget target) {
+        if (target == GeocodeTarget.RESTAURANT) {
+            return new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Không xác định được vị trí nhà hàng từ địa chỉ trong Cài đặt hệ thống. "
+                            + "Vui lòng kiểm tra lại địa chỉ nhà hàng");
+        }
+
         return new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
                 "Không tìm thấy địa chỉ giao hàng trên bản đồ. "
-                        + "Vui lòng nhập đầy đủ số nhà, tên đường, phường/xã và tỉnh/thành phố");
+                        + "Vui lòng nhập đầy đủ số nhà và tên đường");
     }
 
     private enum GeocodeTarget {
+        RESTAURANT,
         DELIVERY
     }
 
