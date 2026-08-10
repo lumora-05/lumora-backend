@@ -1,8 +1,8 @@
 -- Nâng cấp chức năng khách đặt món giao tận nơi theo mô hình:
--- khách đặt trên website -> Google Places chuẩn hóa địa chỉ -> Routes API tính quãng đường/phí -> thu ngân xác nhận
--- -> COD xuống bếp ngay / VietQR chờ thanh toán rồi xuống bếp -> điều phối tài xế gần khi bếp hoàn tất
--- -> bàn giao -> đối tác gửi webhook kết quả -> thu ngân đối soát.
--- Không thêm vai trò SHIPPER.
+-- chọn địa chỉ -> kiểm tra giờ/phạm vi giao -> chọn món/checkout -> backend kiểm tra lần cuối
+-- -> COD chuyển thẳng xuống bếp / VietQR chờ thanh toán rồi xuống bếp
+-- -> điều phối tài xế theo thời điểm món dự kiến sẵn sàng -> bàn giao -> giao thành công.
+-- Không thêm vai trò SHIPPER; đối soát/hóa đơn là nghiệp vụ nội bộ sau giao.
 
 BEGIN;
 
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS giao_hang_don_hang (
     so_tien_da_hoan NUMERIC(12,2) NOT NULL DEFAULT 0,
     thoi_gian_het_han_thanh_toan TIMESTAMP,
     da_canh_bao_cho_xac_nhan BOOLEAN NOT NULL DEFAULT FALSE,
-    trang_thai_giao_hang VARCHAR(30) NOT NULL DEFAULT 'CHO_XAC_NHAN',
+    trang_thai_giao_hang VARCHAR(30) NOT NULL DEFAULT 'DANG_CHUAN_BI',
     don_vi_van_chuyen VARCHAR(120),
     ten_nguoi_giao VARCHAR(120),
     so_dien_thoai_nguoi_giao VARCHAR(20),
@@ -106,7 +106,8 @@ ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_tien_can_hoan NUMERIC
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_tien_da_hoan NUMERIC(12,2) NOT NULL DEFAULT 0;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS thoi_gian_het_han_thanh_toan TIMESTAMP;
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS da_canh_bao_cho_xac_nhan BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS trang_thai_giao_hang VARCHAR(30) NOT NULL DEFAULT 'CHO_XAC_NHAN';
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS trang_thai_giao_hang VARCHAR(30) NOT NULL DEFAULT 'DANG_CHUAN_BI';
+ALTER TABLE giao_hang_don_hang ALTER COLUMN trang_thai_giao_hang SET DEFAULT 'DANG_CHUAN_BI';
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS don_vi_van_chuyen VARCHAR(120);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ten_nguoi_giao VARCHAR(120);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_dien_thoai_nguoi_giao VARCHAR(20);

@@ -13,7 +13,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 /**
- * Mô phỏng API GrabExpress cho mục đích đồ án/demo.
+ * Mô phỏng API đối tác giao hàng cho mục đích đồ án/demo.
  * Không gọi API Grab thật và không tạo vai trò SHIPPER trong LUMORA.
  */
 @Service
@@ -42,13 +42,13 @@ public class MockDeliveryProviderService implements DeliveryProviderService {
 
         String provider = StringUtils.hasText(deliveryProperties.getMockProviderName())
                 ? deliveryProperties.getMockProviderName().trim()
-                : "GrabExpress (Demo)";
+                : "Đối tác giao hàng (Demo)";
         String prefix = StringUtils.hasText(deliveryProperties.getMockWaybillPrefix())
                 ? deliveryProperties.getMockWaybillPrefix().trim().toUpperCase(Locale.ROOT)
-                : "GRAB-DEMO";
+                : "DELIVERY-DEMO";
         prefix = prefix.replaceAll("[^A-Z0-9-]", "");
         if (prefix.isBlank()) {
-            prefix = "GRAB-DEMO";
+            prefix = "DELIVERY-DEMO";
         }
 
         String randomPart = UUID.randomUUID().toString().replace("-", "")

@@ -2,6 +2,7 @@ package com.example.restaurant.service;
 
 import com.example.restaurant.config.DeliveryProperties;
 import com.example.restaurant.config.GoogleMapsProperties;
+import com.example.restaurant.config.RestaurantInfoProperties;
 import com.example.restaurant.dto.DeliveryHandoverRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateResponse;
@@ -36,6 +37,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.text.Normalizer;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -58,7 +60,6 @@ public class DeliveryOrderService {
     private static final String PAYMENT_VIETQR = "VIETQR";
     private static final Set<String> PAYMENT_METHODS = Set.of(PAYMENT_COD, PAYMENT_VIETQR);
 
-    private static final String DELIVERY_WAITING_CONFIRMATION = "CHO_XAC_NHAN";
     private static final String DELIVERY_WAITING_PAYMENT = "CHO_THANH_TOAN";
     private static final String DELIVERY_PREPARING = "DANG_CHUAN_BI";
     private static final String DELIVERY_WAITING_DRIVER = "CHO_TAI_XE_NHAN";
@@ -85,9 +86,11 @@ public class DeliveryOrderService {
     private final FoodRepository foodRepository;
     private final InvoiceRepository invoiceRepository;
     private final OrderPricingService orderPricingService;
+    private final PromotionService promotionService;
     private final PaymentService paymentService;
     private final DeliveryProperties deliveryProperties;
     private final GoogleMapsProperties googleMapsProperties;
+    private final RestaurantInfoProperties restaurantInfoProperties;
     private final GoogleMapsRouteService googleMapsRouteService;
     private final DeliveryProviderService deliveryProviderService;
     private final FoodTraceabilityService foodTraceabilityService;
@@ -100,9 +103,11 @@ public class DeliveryOrderService {
                                 FoodRepository foodRepository,
                                 InvoiceRepository invoiceRepository,
                                 OrderPricingService orderPricingService,
+                                PromotionService promotionService,
                                 PaymentService paymentService,
                                 DeliveryProperties deliveryProperties,
                                 GoogleMapsProperties googleMapsProperties,
+                                RestaurantInfoProperties restaurantInfoProperties,
                                 GoogleMapsRouteService googleMapsRouteService,
                                 DeliveryProviderService deliveryProviderService,
                                 FoodTraceabilityService foodTraceabilityService,
@@ -114,9 +119,11 @@ public class DeliveryOrderService {
         this.foodRepository = foodRepository;
         this.invoiceRepository = invoiceRepository;
         this.orderPricingService = orderPricingService;
+        this.promotionService = promotionService;
         this.paymentService = paymentService;
         this.deliveryProperties = deliveryProperties;
         this.googleMapsProperties = googleMapsProperties;
+        this.restaurantInfoProperties = restaurantInfoProperties;
         this.googleMapsRouteService = googleMapsRouteService;
         this.deliveryProviderService = deliveryProviderService;
         this.foodTraceabilityService = foodTraceabilityService;
@@ -126,6 +133,7 @@ public class DeliveryOrderService {
 
     @Transactional(readOnly = true)
     public DeliveryQuoteResponse quote(DeliveryQuoteRequest request) {
+        ensureRestaurantAcceptingOrders();
         return resolveDeliveryQuote(
                 request.tinhThanh(),
                 request.quanHuyen(),
@@ -138,6 +146,7 @@ public class DeliveryOrderService {
 
     @Transactional
     public DeliveryOrderCreateResponse createOrder(DeliveryOrderCreateRequest request) {
+        ensureRestaurantAcceptingOrders();
         String clientRequestId = requiredText(request.clientRequestId(), "Mã chống tạo trùng không hợp lệ");
         String recipientPhone = normalizePhone(request.soDienThoaiNhan());
         OrderDelivery duplicated = deliveryRepository.findByClientRequestId(clientRequestId).orElse(null);
@@ -185,7 +194,7 @@ public class DeliveryOrderService {
         order.setBanAn(null);
         order.setLoaiDon(ORDER_TYPE_DELIVERY);
         order.setNguonDon(ORDER_SOURCE_WEBSITE);
-        order.setTrangThai(DELIVERY_WAITING_CONFIRMATION);
+        order.setTrangThai(DELIVERY_PREPARING);
         order.setGhiChu(trimToNull(request.ghiChuDonHang()));
         order.setTamTinh(BigDecimal.ZERO);
         order.setTienGiam(BigDecimal.ZERO);
@@ -238,26 +247,62 @@ public class DeliveryOrderService {
         delivery.setPhiGiaoHang(quote.phiGiaoHang());
         delivery.setPhuongThucThanhToan(paymentMethod);
         delivery.setTrangThaiThanhToan(PAYMENT_WAITING);
-        delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_CONFIRMATION);
         delivery.setSoTienDaThanhToan(BigDecimal.ZERO);
         delivery.setSoTienCanHoan(BigDecimal.ZERO);
         delivery.setSoTienDaHoan(BigDecimal.ZERO);
         delivery.setDaCanhBaoChoXacNhan(false);
         order.setGiaoHang(delivery);
 
+        // Quy trình mới: backend kiểm tra lần cuối trước khi nhận đơn.
+        // Không còn bước thu ngân duyệt thủ công trước khi xuống bếp.
+        foodTraceabilityService.validateAvailabilityForOrder(order);
         orderPricingService.recalculate(order);
+        if (StringUtils.hasText(request.maCodeKhuyenMai())) {
+            promotionService.applyToNewOrder(order, request.maCodeKhuyenMai());
+        }
+
+        LocalDateTime acceptedAt = LocalDateTime.now();
+        boolean vietQr = PAYMENT_VIETQR.equals(paymentMethod);
+        if (vietQr) {
+            int timeoutMinutes = positiveOrDefault(deliveryProperties.getPaymentTimeoutMinutes(), 15);
+            delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_PAYMENT);
+            delivery.setThoiGianHetHanThanhToan(acceptedAt.plusMinutes(timeoutMinutes));
+            order.setTrangThai(DELIVERY_WAITING_PAYMENT);
+        } else {
+            delivery.setTrangThaiGiaoHang(DELIVERY_PREPARING);
+            delivery.setThoiGianXacNhan(acceptedAt);
+            delivery.setThoiGianHetHanThanhToan(null);
+            order.setTrangThai("DA_XAC_NHAN");
+        }
+
         Order savedOrder = orderRepository.saveAndFlush(order);
 
-        systemActivityService.record(
-                "DELIVERY_ORDER_CREATED",
-                "Đơn giao hàng #DH" + savedOrder.getMaDonHang() + " đã được khách gửi và đang chờ xác nhận",
-                savedOrder.getMaDonHang()
-        );
-        realtimeNotificationService.notifyDeliveryOrderChanged(
-                "DELIVERY_ORDER_CREATED",
-                "Có đơn giao hàng mới chờ xác nhận",
-                savedOrder
-        );
+        if (vietQr) {
+            systemActivityService.record(
+                    "DELIVERY_ORDER_CREATED_WAITING_PAYMENT",
+                    "Đơn giao hàng #DH" + savedOrder.getMaDonHang()
+                            + " đã qua kiểm tra cuối và đang chờ thanh toán VietQR",
+                    savedOrder.getMaDonHang()
+            );
+            realtimeNotificationService.notifyDeliveryOrderChanged(
+                    "DELIVERY_ORDER_WAITING_PAYMENT",
+                    "Đơn đã được kiểm tra. Vui lòng thanh toán VietQR để chuyển xuống bếp",
+                    savedOrder
+            );
+        } else {
+            systemActivityService.record(
+                    "DELIVERY_ORDER_SENT_TO_KITCHEN",
+                    "Đơn giao hàng #DH" + savedOrder.getMaDonHang()
+                            + " đã được hệ thống kiểm tra và chuyển thẳng xuống bếp",
+                    savedOrder.getMaDonHang()
+            );
+            realtimeNotificationService.notifyKitchenOrderConfirmed(savedOrder);
+            realtimeNotificationService.notifyDeliveryOrderChanged(
+                    "DELIVERY_ORDER_SENT_TO_KITCHEN",
+                    "Đơn hợp lệ đã được chuyển thẳng xuống bếp",
+                    savedOrder
+            );
+        }
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
         return toCreateResponse(savedOrder);
     }
@@ -315,9 +360,7 @@ public class DeliveryOrderService {
         if (!DELIVERY_WAITING_PAYMENT.equals(normalize(delivery.getTrangThaiGiaoHang()))) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    DELIVERY_WAITING_CONFIRMATION.equals(normalize(delivery.getTrangThaiGiaoHang()))
-                            ? "Nhà hàng chưa xác nhận nhận đơn. VietQR chỉ mở sau khi đơn được chấp nhận"
-                            : "Đơn hàng hiện không ở bước chờ thanh toán VietQR"
+                    "Đơn hàng hiện không ở bước chờ thanh toán VietQR"
             );
         }
         if (!PAYMENT_WAITING.equals(normalize(delivery.getTrangThaiThanhToan()))) {
@@ -342,10 +385,10 @@ public class DeliveryOrderService {
         Order order = lockOrder(delivery.getDonHang().getMaDonHang());
         OrderDelivery lockedDelivery = order.getGiaoHang();
         String current = normalize(lockedDelivery.getTrangThaiGiaoHang());
-        if (!Set.of(DELIVERY_WAITING_CONFIRMATION, DELIVERY_WAITING_PAYMENT).contains(current)) {
+        if (!DELIVERY_WAITING_PAYMENT.equals(current)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Chỉ có thể tự hủy trước khi đơn được chuyển xuống bếp"
+                    "Đơn đã được chuyển xuống bếp. Vui lòng liên hệ nhà hàng nếu cần hỗ trợ hủy"
             );
         }
         if (PAYMENT_PAID.equals(normalize(lockedDelivery.getTrangThaiThanhToan()))) {
@@ -356,77 +399,7 @@ public class DeliveryOrderService {
                 request.lyDo(),
                 "Khách hàng đã hủy đơn trước khi chế biến",
                 PAYMENT_CANCELLED,
-                DELIVERY_WAITING_CONFIRMATION,
                 DELIVERY_WAITING_PAYMENT
-        );
-    }
-
-    @Transactional
-    public Order confirm(Integer orderId) {
-        Order order = lockDeliveryOrder(orderId);
-        OrderDelivery delivery = order.getGiaoHang();
-        requireDeliveryStatus(delivery, DELIVERY_WAITING_CONFIRMATION);
-
-        // Kiểm tra tổng khả năng đáp ứng trước khi nhà hàng nhận đơn.
-        foodTraceabilityService.validateAvailabilityForOrder(order);
-
-        LocalDateTime now = LocalDateTime.now();
-        delivery.setThoiGianXacNhan(now);
-        delivery.setLyDoTuChoi(null);
-        delivery.setDaCanhBaoChoXacNhan(false);
-
-        boolean vietQr = PAYMENT_VIETQR.equals(normalize(delivery.getPhuongThucThanhToan()));
-        if (vietQr) {
-            int timeoutMinutes = positiveOrDefault(deliveryProperties.getPaymentTimeoutMinutes(), 15);
-            delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_PAYMENT);
-            delivery.setTrangThaiThanhToan(PAYMENT_WAITING);
-            delivery.setThoiGianHetHanThanhToan(now.plusMinutes(timeoutMinutes));
-            order.setTrangThai(DELIVERY_WAITING_PAYMENT);
-        } else {
-            delivery.setTrangThaiGiaoHang(DELIVERY_PREPARING);
-            delivery.setThoiGianHetHanThanhToan(null);
-            order.setTrangThai("DA_XAC_NHAN");
-        }
-        Order savedOrder = orderRepository.saveAndFlush(order);
-
-        if (vietQr) {
-            systemActivityService.record(
-                    "DELIVERY_ORDER_ACCEPTED_WAITING_PAYMENT",
-                    "Đơn giao hàng #DH" + savedOrder.getMaDonHang()
-                            + " đã được nhận; đang chờ khách thanh toán VietQR trước khi xuống bếp",
-                    savedOrder.getMaDonHang()
-            );
-            realtimeNotificationService.notifyDeliveryOrderChanged(
-                    "DELIVERY_ORDER_WAITING_PAYMENT",
-                    "Nhà hàng đã nhận đơn. Vui lòng thanh toán VietQR để chuyển món xuống bếp",
-                    savedOrder
-            );
-        } else {
-            systemActivityService.record(
-                    "DELIVERY_ORDER_CONFIRMED",
-                    "Đơn giao hàng #DH" + savedOrder.getMaDonHang() + " đã được xác nhận và chuyển xuống bếp",
-                    savedOrder.getMaDonHang()
-            );
-            realtimeNotificationService.notifyKitchenOrderConfirmed(savedOrder);
-            realtimeNotificationService.notifyDeliveryOrderChanged(
-                    "DELIVERY_ORDER_CONFIRMED",
-                    "Đơn giao hàng đã được nhà hàng xác nhận và chuyển xuống bếp",
-                    savedOrder
-            );
-        }
-        realtimeNotificationService.notifyDashboardRefresh(savedOrder);
-        return savedOrder;
-    }
-
-    @Transactional
-    public Order reject(Integer orderId, DeliveryReasonRequest request) {
-        Order order = lockDeliveryOrder(orderId);
-        return cancelPendingOrder(
-                order,
-                request.lyDo(),
-                "Nhà hàng đã từ chối đơn giao hàng",
-                PAYMENT_CANCELLED,
-                DELIVERY_WAITING_CONFIRMATION
         );
     }
 
@@ -470,19 +443,20 @@ public class DeliveryOrderService {
         if (inventoryError == null) {
             delivery.setTrangThaiThanhToan(PAYMENT_PAID);
             delivery.setTrangThaiGiaoHang(DELIVERY_PREPARING);
+            delivery.setThoiGianXacNhan(LocalDateTime.now());
             order.setTrangThai("DA_XAC_NHAN");
             Order savedOrder = orderRepository.saveAndFlush(order);
 
             systemActivityService.record(
                     "DELIVERY_VIETQR_CONFIRMED",
-                    "Thu ngân đã xác nhận VietQR cho đơn giao hàng #DH" + savedOrder.getMaDonHang()
-                            + " và chuyển đơn xuống bếp",
+                    "VietQR đã được ghi nhận cho đơn giao hàng #DH" + savedOrder.getMaDonHang()
+                            + "; hệ thống chuyển đơn xuống bếp",
                     savedOrder.getMaDonHang()
             );
             realtimeNotificationService.notifyKitchenOrderConfirmed(savedOrder);
             realtimeNotificationService.notifyDeliveryOrderChanged(
                     "DELIVERY_PAYMENT_CONFIRMED",
-                    "Thanh toán VietQR đã được xác nhận; đơn đã chuyển xuống bếp",
+                    "Thanh toán VietQR đã được ghi nhận; đơn đã chuyển xuống bếp",
                     savedOrder
             );
             realtimeNotificationService.notifyDashboardRefresh(savedOrder);
@@ -501,6 +475,7 @@ public class DeliveryOrderService {
                 500
         ));
         delivery.setThoiGianHuy(LocalDateTime.now());
+        promotionService.releaseForCancelledOrder(order);
         orderPricingService.recalculate(order);
         Order savedOrder = orderRepository.saveAndFlush(order);
 
@@ -569,8 +544,8 @@ public class DeliveryOrderService {
 
     /**
      * Được OrderService gọi sau mỗi lần bếp cập nhật một suất món.
-     * Tài xế có thể được điều phối sớm khi tiến độ bếp đạt ngưỡng cấu hình; chỉ khi
-     * toàn bộ món hoàn thành đơn mới chuyển sang trạng thái sẵn sàng bàn giao.
+     * Tài xế được điều phối theo thời điểm món dự kiến sẵn sàng; chỉ khi toàn bộ
+     * món hoàn thành đơn mới chuyển sang trạng thái sẵn sàng bàn giao.
      */
     @Transactional
     public void synchronizeAfterKitchenUpdate(Order order) {
@@ -580,7 +555,6 @@ public class DeliveryOrderService {
         OrderDelivery delivery = order.getGiaoHang();
         String deliveryStatus = normalize(delivery.getTrangThaiGiaoHang());
         if (Set.of(
-                DELIVERY_WAITING_CONFIRMATION,
                 DELIVERY_WAITING_PAYMENT,
                 DELIVERY_IN_TRANSIT,
                 DELIVERY_AWAITING_RECONCILIATION,
@@ -629,21 +603,22 @@ public class DeliveryOrderService {
                 .filter(item -> isKitchenCompleted(item.getTrangThaiMon()))
                 .count();
         boolean allCompleted = completedCount == activeItems.size();
-        int progressPercent = (int) Math.floor(completedCount * 100.0 / activeItems.size());
-        int assignmentThreshold = Math.max(1, Math.min(100,
-                positiveOrDefault(deliveryProperties.getDriverAssignmentProgressPercent(), 70)));
+        boolean anyStarted = activeItems.stream()
+                .anyMatch(item -> !"CHO_BEP".equals(normalize(item.getTrangThaiMon())));
 
-        if (!allCompleted && progressPercent >= assignmentThreshold && !hasProviderAssignment(delivery)) {
+        // Không dùng ngưỡng phần trăm món hoàn thành nữa. Điều phối theo thời điểm
+        // món dự kiến sẵn sàng để giảm thời gian tài xế phải chờ tại nhà hàng.
+        if (!allCompleted && anyStarted && shouldPreassignDriver(order, delivery) && !hasProviderAssignment(delivery)) {
             assignDeliveryProvider(order, delivery);
             realtimeNotificationService.notifyDeliveryOrderChanged(
                     "DELIVERY_DRIVER_PREASSIGNED",
-                    "Bếp đã gần hoàn thành; đơn vị vận chuyển đã điều phối tài xế đến nhà hàng",
+                    "Món sắp sẵn sàng; hệ thống đã điều phối đơn vị vận chuyển",
                     order
             );
             systemActivityService.record(
                     "DELIVERY_DRIVER_PREASSIGNED",
-                    "Đã điều phối tài xế sớm cho đơn #DH" + order.getMaDonHang()
-                            + " khi tiến độ bếp đạt " + progressPercent + "%",
+                    "Đã điều phối tài xế theo thời điểm món dự kiến sẵn sàng cho đơn #DH"
+                            + order.getMaDonHang(),
                     order.getMaDonHang()
             );
         }
@@ -676,8 +651,6 @@ public class DeliveryOrderService {
         }
         order.setThoiGianSanSang(null);
         delivery.setTrangThaiGiaoHang(DELIVERY_PREPARING);
-        boolean anyStarted = activeItems.stream()
-                .anyMatch(item -> !"CHO_BEP".equals(normalize(item.getTrangThaiMon())));
         order.setTrangThai(anyStarted ? "DANG_CHE_BIEN" : "DA_XAC_NHAN");
     }
 
@@ -724,8 +697,8 @@ public class DeliveryOrderService {
     }
 
     /**
-     * Thu ngân chỉ hoàn tất sau khi webhook đối tác báo giao thành công. Như vậy
-     * nhân viên không còn phải tự đoán kết quả giao hàng ngoài đường.
+     * Bước nội bộ sau khi đối tác đã báo giao thành công: ghi nhận hóa đơn/kế toán.
+     * Trạng thái này không còn xuất hiện trong hành trình theo dõi của khách.
      */
     @Transactional
     public Order complete(Integer orderId, String username) {
@@ -757,12 +730,12 @@ public class DeliveryOrderService {
 
         systemActivityService.record(
                 "DELIVERY_COMPLETED",
-                "Đơn " + delivery.getMaVanChuyen() + " đã đối soát giao thành công và tạo hóa đơn",
+                "Đơn " + delivery.getMaVanChuyen() + " đã được ghi nhận hóa đơn sau giao thành công",
                 savedOrder.getMaDonHang()
         );
         realtimeNotificationService.notifyDeliveryOrderChanged(
                 "DELIVERY_COMPLETED",
-                "Đơn hàng đã giao thành công và hoàn tất đối soát",
+                "Đã hoàn tất ghi nhận nội bộ cho đơn giao thành công",
                 savedOrder
         );
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
@@ -834,7 +807,14 @@ public class DeliveryOrderService {
         delivery.setThoiGianCapNhatDoiTac(LocalDateTime.now());
 
         if (PROVIDER_DELIVERED.equals(providerStatus)) {
+            // Khách được coi là đã nhận hàng ngay khi đối tác báo giao thành công.
+            // CHO_DOI_SOAT chỉ còn là trạng thái nội bộ để thu ngân ghi nhận hóa đơn.
             delivery.setTrangThaiGiaoHang(DELIVERY_AWAITING_RECONCILIATION);
+            delivery.setThoiGianGiaoThanhCong(delivery.getThoiGianCapNhatDoiTac());
+            if (PAYMENT_COD.equals(normalize(delivery.getPhuongThucThanhToan()))) {
+                delivery.setTrangThaiThanhToan(PAYMENT_PAID);
+                delivery.setSoTienDaThanhToan(money(order.getTongTien()));
+            }
             order.setTrangThai(DELIVERY_AWAITING_RECONCILIATION);
         } else {
             delivery.setTrangThaiGiaoHang(DELIVERY_FAILED);
@@ -851,7 +831,7 @@ public class DeliveryOrderService {
         realtimeNotificationService.notifyDeliveryOrderChanged(
                 "DELIVERY_PROVIDER_STATUS_UPDATED",
                 PROVIDER_DELIVERED.equals(providerStatus)
-                        ? "Đối tác báo giao thành công; đơn đang chờ thu ngân đối soát"
+                        ? "Đơn đã giao thành công; phần ghi nhận hóa đơn được xử lý nội bộ"
                         : "Đối tác báo giao thất bại",
                 savedOrder
         );
@@ -884,11 +864,9 @@ public class DeliveryOrderService {
         return savedOrder;
     }
 
-    /** Chạy định kỳ: cảnh báo đơn chờ xác nhận quá lâu và tự hủy VietQR hết hạn. */
+    /** Chạy định kỳ: điều phối tài xế theo ETA và tự hủy VietQR hết hạn. */
     @Transactional
     public void performMaintenance() {
-        LocalDateTime now = LocalDateTime.now();
-        int warningMinutes = positiveOrDefault(deliveryProperties.getConfirmationWarningMinutes(), 10);
         List<Order> orders = orderRepository.findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(ORDER_TYPE_DELIVERY);
         for (Order order : orders) {
             if (order.getGiaoHang() == null) {
@@ -897,21 +875,23 @@ public class DeliveryOrderService {
             OrderDelivery delivery = order.getGiaoHang();
             String status = normalize(delivery.getTrangThaiGiaoHang());
 
-            if (DELIVERY_WAITING_CONFIRMATION.equals(status)
-                    && !Boolean.TRUE.equals(delivery.getDaCanhBaoChoXacNhan())
-                    && order.getThoiGianDat() != null
-                    && !order.getThoiGianDat().plusMinutes(warningMinutes).isAfter(now)) {
-                delivery.setDaCanhBaoChoXacNhan(true);
+            if (DELIVERY_PREPARING.equals(status)
+                    && !hasProviderAssignment(delivery)
+                    && hasKitchenStarted(order)
+                    && shouldPreassignDriver(order, delivery)) {
+                assignDeliveryProvider(order, delivery);
+                orderRepository.saveAndFlush(order);
                 systemActivityService.record(
-                        "DELIVERY_CONFIRMATION_OVERDUE",
-                        "Đơn giao hàng #DH" + order.getMaDonHang() + " chờ xác nhận quá " + warningMinutes + " phút",
+                        "DELIVERY_DRIVER_PREASSIGNED",
+                        "Hệ thống tự điều phối tài xế theo ETA cho đơn #DH" + order.getMaDonHang(),
                         order.getMaDonHang()
                 );
                 realtimeNotificationService.notifyDeliveryOrderChanged(
-                        "DELIVERY_CONFIRMATION_OVERDUE",
-                        "Đơn giao hàng đang chờ xác nhận quá lâu, vui lòng xử lý",
+                        "DELIVERY_DRIVER_PREASSIGNED",
+                        "Món sắp sẵn sàng; đơn vị vận chuyển đã được điều phối",
                         order
                 );
+                realtimeNotificationService.notifyDashboardRefresh(order);
             }
 
             if (DELIVERY_WAITING_PAYMENT.equals(status)
@@ -931,6 +911,7 @@ public class DeliveryOrderService {
         delivery.setLyDoTuChoi("Đơn VietQR tự hủy vì quá thời hạn thanh toán");
         delivery.setThoiGianHuy(LocalDateTime.now());
         delivery.setThoiGianHetHanThanhToan(null);
+        promotionService.releaseForCancelledOrder(order);
         orderPricingService.recalculate(order);
         orderRepository.saveAndFlush(order);
         systemActivityService.record(
@@ -962,6 +943,7 @@ public class DeliveryOrderService {
         delivery.setThoiGianHetHanThanhToan(null);
         clearProviderAssignment(delivery);
         clearProviderResult(delivery);
+        promotionService.releaseForCancelledOrder(order);
         orderPricingService.recalculate(order);
         synchronizeRefundState(order, delivery);
         if (money(delivery.getSoTienDaThanhToan()).signum() <= 0) {
@@ -1121,6 +1103,7 @@ public class DeliveryOrderService {
                     placeId,
                     route.distanceMeters(),
                     route.durationSeconds(),
+                    estimatedCustomerEtaSeconds(route.durationSeconds()),
                     route.encodedPolyline()
             );
         }
@@ -1177,8 +1160,69 @@ public class DeliveryOrderService {
                 null,
                 null,
                 null,
+                estimatedCustomerEtaSeconds(null),
                 null
         );
+    }
+
+    private void ensureRestaurantAcceptingOrders() {
+        LocalDateTime now = LocalDateTime.now(ZoneId.of("Asia/Ho_Chi_Minh"));
+        if (!ReservationPolicyValidator.isWithinOpeningHours(
+                now,
+                now.plusMinutes(1),
+                restaurantInfoProperties.getOpeningHours()
+        )) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Nhà hàng hiện ngoài giờ nhận đơn. Giờ hoạt động: "
+                            + restaurantInfoProperties.getOpeningHours()
+            );
+        }
+    }
+
+    private long estimatedCustomerEtaSeconds(Long routeDurationSeconds) {
+        long preparationSeconds = positiveOrDefault(deliveryProperties.getPreparationMinutes(), 25) * 60L;
+        long deliverySeconds = routeDurationSeconds != null && routeDurationSeconds > 0
+                ? routeDurationSeconds
+                : positiveOrDefault(deliveryProperties.getFallbackDeliveryMinutes(), 20) * 60L;
+        return preparationSeconds + deliverySeconds;
+    }
+
+    private boolean shouldPreassignDriver(Order order, OrderDelivery delivery) {
+        LocalDateTime acceptedAt = delivery.getThoiGianXacNhan() != null
+                ? delivery.getThoiGianXacNhan()
+                : order.getThoiGianDat();
+        if (acceptedAt == null) {
+            return false;
+        }
+        int preparationMinutes = positiveOrDefault(deliveryProperties.getPreparationMinutes(), 25);
+        int leadMinutes = Math.min(
+                preparationMinutes,
+                positiveOrDefault(deliveryProperties.getDriverAssignmentLeadMinutes(), 8)
+        );
+        LocalDateTime dispatchAt = acceptedAt.plusMinutes(preparationMinutes - leadMinutes);
+        return !LocalDateTime.now().isBefore(dispatchAt);
+    }
+
+    private boolean hasKitchenStarted(Order order) {
+        return order != null && order.getChiTietDonHang() != null
+                && order.getChiTietDonHang().stream()
+                .filter(item -> !"DA_HUY".equals(normalize(item.getTrangThaiMon())))
+                .anyMatch(item -> !"CHO_BEP".equals(normalize(item.getTrangThaiMon())));
+    }
+
+    private String publicDeliveryStatus(String status) {
+        String normalized = normalize(status);
+        if (DELIVERY_AWAITING_RECONCILIATION.equals(normalized)) {
+            return DELIVERY_COMPLETED;
+        }
+        if (LEGACY_DELIVERY_WAITING_HANDOVER.equals(normalized)) {
+            return DELIVERY_WAITING_DRIVER;
+        }
+        if ("CHO_XAC_NHAN".equals(normalized)) {
+            return DELIVERY_PREPARING;
+        }
+        return normalized;
     }
 
     private double positiveDoubleOrDefault(Double value, double fallback) {
@@ -1341,7 +1385,7 @@ public class DeliveryOrderService {
                 delivery.getTrackingToken(),
                 delivery.getMaVanChuyen(),
                 order.getTrangThai(),
-                delivery.getTrangThaiGiaoHang(),
+                publicDeliveryStatus(delivery.getTrangThaiGiaoHang()),
                 delivery.getTenNguoiNhan(),
                 maskPhone(delivery.getSoDienThoaiNhan()),
                 delivery.getDiaChiGiaoHang(),
@@ -1354,6 +1398,7 @@ public class DeliveryOrderService {
                 delivery.getGooglePlaceId(),
                 delivery.getQuangDuongMet(),
                 delivery.getThoiGianDuKienGiay(),
+                estimatedCustomerEtaSeconds(delivery.getThoiGianDuKienGiay()),
                 delivery.getGoogleRoutePolyline(),
                 delivery.getGhiChuGiaoHang(),
                 delivery.getPhuongThucThanhToan(),

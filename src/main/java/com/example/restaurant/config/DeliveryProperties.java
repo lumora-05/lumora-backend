@@ -20,12 +20,16 @@ public class DeliveryProperties {
     private List<String> innerDistricts = new ArrayList<>(List.of("Thanh Khê", "Hải Châu"));
     private List<String> nearbyDistricts = new ArrayList<>(List.of("Sơn Trà", "Ngũ Hành Sơn", "Cẩm Lệ", "Liên Chiểu", "Hòa Vang"));
     private String shippingCodePrefix = "LUM-VC";
-    private String mockProviderName = "GrabExpress (Demo)";
-    private String mockWaybillPrefix = "GRAB-DEMO";
+    private String mockProviderName = "Đối tác giao hàng (Demo)";
+    private String mockWaybillPrefix = "DELIVERY-DEMO";
     private Integer maxUnitsPerItem = 50;
     private Integer maxUnitsPerOrder = 100;
     private Integer paymentTimeoutMinutes = 15;
-    private Integer confirmationWarningMinutes = 10;
-    private Integer driverAssignmentProgressPercent = 70;
+    /** Thời gian chuẩn bị món ước tính dùng để tính ETA và thời điểm gọi đối tác vận chuyển. */
+    private Integer preparationMinutes = 25;
+    /** Gọi tài xế trước thời điểm món dự kiến sẵn sàng bao nhiêu phút. */
+    private Integer driverAssignmentLeadMinutes = 8;
+    /** Thời gian giao dự phòng khi chưa có Google Routes. */
+    private Integer fallbackDeliveryMinutes = 20;
     private String providerWebhookToken = "";
 }
