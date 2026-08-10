@@ -14,6 +14,7 @@ public record DeliveryQuoteResponse(
         String googlePlaceId,
         Integer quangDuongMet,
         Long thoiGianDuKienGiay,
+        Long thoiGianNhanDuKienGiay,
         String encodedPolyline
 ) {
 }

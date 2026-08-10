@@ -12,7 +12,7 @@ public class DeliveryOrderMaintenanceScheduler {
         this.deliveryOrderService = deliveryOrderService;
     }
 
-    /** Cảnh báo đơn chờ xác nhận lâu và tự hủy VietQR hết hạn. */
+    /** Tự điều phối tài xế theo ETA và tự hủy VietQR hết hạn. */
     @Scheduled(fixedDelay = 60_000L, initialDelay = 45_000L)
     public void maintainDeliveryOrders() {
         deliveryOrderService.performMaintenance();

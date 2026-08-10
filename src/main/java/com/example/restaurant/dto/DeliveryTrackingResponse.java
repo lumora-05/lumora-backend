@@ -23,6 +23,7 @@ public record DeliveryTrackingResponse(
         String googlePlaceId,
         Integer quangDuongMet,
         Long thoiGianDuKienGiay,
+        Long thoiGianNhanDuKienGiay,
         String googleRoutePolyline,
         String ghiChuGiaoHang,
         String phuongThucThanhToan,

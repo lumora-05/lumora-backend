@@ -23,6 +23,7 @@ public record DeliveryOrderCreateRequest(
         @Size(max = 255) String googlePlaceId,
         @Size(max = 700) String googleFormattedAddress,
         @Size(max = 500) String ghiChuGiaoHang,
+        @Size(max = 50) String maCodeKhuyenMai,
         @NotBlank @Size(max = 20) String phuongThucThanhToan,
         @Size(max = 255) String ghiChuDonHang,
         @NotEmpty List<@Valid Item> items

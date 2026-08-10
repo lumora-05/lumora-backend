@@ -120,9 +120,9 @@ public class OrderDelivery {
     @Column(name = "da_canh_bao_cho_xac_nhan", nullable = false)
     private Boolean daCanhBaoChoXacNhan = false;
 
-    /** CHO_XAC_NHAN, CHO_THANH_TOAN, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, CHO_DOI_SOAT, HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
+    /** CHO_THANH_TOAN, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, CHO_DOI_SOAT (nội bộ), HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
     @Column(name = "trang_thai_giao_hang", length = 30, nullable = false)
-    private String trangThaiGiaoHang = "CHO_XAC_NHAN";
+    private String trangThaiGiaoHang = "DANG_CHUAN_BI";
 
     @Column(name = "don_vi_van_chuyen", length = 120)
     private String donViVanChuyen;
@@ -208,7 +208,7 @@ public class OrderDelivery {
             trangThaiThanhToan = "CHO_THANH_TOAN";
         }
         if (trangThaiGiaoHang == null || trangThaiGiaoHang.isBlank()) {
-            trangThaiGiaoHang = "CHO_XAC_NHAN";
+            trangThaiGiaoHang = "DANG_CHUAN_BI";
         }
     }
 
