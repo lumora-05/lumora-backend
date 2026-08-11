@@ -93,22 +93,70 @@ public class OpenRouteService {
             JsonNode feature = features.get(0);
             JsonNode summary = feature.path("properties").path("summary");
 
-            int distanceMeters = (int) Math.round(summary.path("distance").asDouble(0d));
-            long durationSeconds = Math.round(summary.path("duration").asDouble(0d));
+            JsonNode distanceNode = summary.path("distance");
+            JsonNode durationNode = summary.path("duration");
 
-            JsonNode coordinates = feature.path("geometry").path("coordinates");
-            if (distanceMeters <= 0
-                    || coordinates == null
-                    || !coordinates.isArray()
-                    || coordinates.isEmpty()) {
+            if (!distanceNode.isNumber()) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
-                        "Dịch vụ bản đồ không trả về tuyến đường hợp lệ");
+                        "Dịch vụ bản đồ không trả về khoảng cách hợp lệ");
+            }
+
+            double rawDistanceMeters = distanceNode.asDouble();
+            if (!Double.isFinite(rawDistanceMeters) || rawDistanceMeters < 0d) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Dịch vụ bản đồ không trả về khoảng cách hợp lệ");
+            }
+
+            int distanceMeters = (int) Math.round(rawDistanceMeters);
+            long durationSeconds = durationNode.isNumber()
+                    ? Math.max(0L, Math.round(durationNode.asDouble()))
+                    : 0L;
+
+            JsonNode coordinates = feature.path("geometry").path("coordinates");
+            boolean geometryValid = coordinates != null
+                    && coordinates.isArray()
+                    && !coordinates.isEmpty();
+
+            /*
+             * openrouteservice đôi khi trả distance = 0 hoặc geometry rỗng khi
+             * điểm đầu và điểm cuối rất gần nhau / cùng được snap vào một đoạn đường.
+             * Đây không phải lỗi đối với đơn giao ngay cạnh nhà hàng.
+             *
+             * Chỉ dùng khoảng cách đường chim bay làm fallback cho trường hợp rất gần
+             * (<= 500 m). Các tuyến xa hơn vẫn bắt buộc phải có route hợp lệ từ ORS
+             * để không làm sai nghiệp vụ tính phí giao hàng.
+             */
+            if (distanceMeters == 0 || !geometryValid) {
+                int directDistanceMeters = (int) Math.round(
+                        haversineDistanceMeters(origin, destination.coordinate()));
+
+                if (directDistanceMeters > 500) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "Dịch vụ bản đồ không trả về tuyến đường hợp lệ");
+                }
+
+                // Tránh trả về 0 m cho hai địa chỉ rất gần hoặc bị snap cùng một điểm.
+                distanceMeters = Math.max(1, directDistanceMeters);
+
+                if (!geometryValid) {
+                    String fallbackGeometry = buildFallbackGeometry(
+                            origin,
+                            destination.coordinate());
+
+                    return new RouteResult(
+                            distanceMeters,
+                            durationSeconds,
+                            fallbackGeometry,
+                            destination.formattedAddress());
+                }
             }
 
             return new RouteResult(
                     distanceMeters,
-                    Math.max(0L, durationSeconds),
+                    durationSeconds,
                     coordinates.toString(),
                     destination.formattedAddress());
         } catch (RestClientException ex) {
@@ -122,7 +170,8 @@ public class OpenRouteService {
 
     /**
      * Lấy địa chỉ nhà hàng từ RestaurantInfoProperties.
-     * SystemSettingService đồng bộ trường này từ bảng cai_dat_he_thong khi khởi động
+     * SystemSettingService đồng bộ trường này từ bảng cai_dat_he_thong khi khởi
+     * động
      * và ngay sau khi admin lưu Cài đặt hệ thống.
      */
     private Coordinate originCoordinate() {
@@ -135,7 +184,8 @@ public class OpenRouteService {
         }
 
         synchronized (this) {
-            // Đọc lại trong synchronized để nếu admin vừa cập nhật địa chỉ thì dùng bản mới nhất.
+            // Đọc lại trong synchronized để nếu admin vừa cập nhật địa chỉ thì dùng bản mới
+            // nhất.
             configuredAddress = currentRestaurantAddress();
             if (originCache == null || !configuredAddress.equals(originCacheAddress)) {
                 GeocodeResult origin = geocodeWithFallback(
@@ -171,7 +221,8 @@ public class OpenRouteService {
     /**
      * Thử nhiều cách viết của cùng một địa chỉ.
      *
-     * Với địa chỉ đầy đủ nhưng Pelias chỉ trả kết quả quá chung như "Đà Nẵng, Việt Nam",
+     * Với địa chỉ đầy đủ nhưng Pelias chỉ trả kết quả quá chung như "Đà Nẵng, Việt
+     * Nam",
      * kết quả đó bị bỏ qua để thử candidate tiếp theo, ví dụ:
      * 137 Đường Nguyễn Thị Thập, Thanh Khê, Đà Nẵng
      * -> 137 Đường Nguyễn Thị Thập, Đà Nẵng
@@ -315,7 +366,8 @@ public class OpenRouteService {
 
     /**
      * Gọi Pelias một lần cho một candidate.
-     * Kết quả hành chính quá chung (city/region/country...) không được dùng làm điểm giao.
+     * Kết quả hành chính quá chung (city/region/country...) không được dùng làm
+     * điểm giao.
      */
     private GeocodeResult tryGeocode(String address, Coordinate focusPoint) {
         UriComponentsBuilder builder = UriComponentsBuilder
@@ -390,7 +442,8 @@ public class OpenRouteService {
 
         return switch (layer) {
             case "country", "macroregion", "region", "macrocounty", "county",
-                    "localadmin", "locality", "borough", "neighbourhood" -> true;
+                    "localadmin", "locality", "borough", "neighbourhood" ->
+                true;
             default -> false;
         };
     }
@@ -420,6 +473,39 @@ public class OpenRouteService {
         return new GeocodeResult(
                 new Coordinate(longitude, latitude),
                 label.trim());
+    }
+
+    /**
+     * Tính khoảng cách đường chim bay giữa hai tọa độ.
+     * Chỉ dùng làm fallback cho trường hợp hai điểm rất gần nhau khi ORS trả 0 m
+     * hoặc không có geometry.
+     */
+    private double haversineDistanceMeters(Coordinate from, Coordinate to) {
+        final double earthRadiusMeters = 6_371_000d;
+
+        double lat1 = Math.toRadians(from.latitude());
+        double lat2 = Math.toRadians(to.latitude());
+        double deltaLat = Math.toRadians(to.latitude() - from.latitude());
+        double deltaLon = Math.toRadians(to.longitude() - from.longitude());
+
+        double a = Math.sin(deltaLat / 2d) * Math.sin(deltaLat / 2d)
+                + Math.cos(lat1) * Math.cos(lat2)
+                        * Math.sin(deltaLon / 2d) * Math.sin(deltaLon / 2d);
+
+        double c = 2d * Math.atan2(Math.sqrt(a), Math.sqrt(1d - a));
+        return earthRadiusMeters * c;
+    }
+
+    /**
+     * Geometry tối thiểu để frontend vẫn có dữ liệu tuyến khi hai điểm rất gần
+     * nhưng ORS không trả geometry.
+     */
+    private String buildFallbackGeometry(Coordinate from, Coordinate to) {
+        return "[["
+                + from.longitude() + "," + from.latitude()
+                + "],["
+                + to.longitude() + "," + to.latitude()
+                + "]]";
     }
 
     private ResponseStatusException geocodeNotFound(GeocodeTarget target) {
