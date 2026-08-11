@@ -150,7 +150,8 @@ public class OpenRouteService {
                             distanceMeters,
                             durationSeconds,
                             fallbackGeometry,
-                            destination.formattedAddress());
+                            destination.formattedAddress(),
+                            destination.locationContext());
                 }
             }
 
@@ -158,7 +159,8 @@ public class OpenRouteService {
                     distanceMeters,
                     durationSeconds,
                     coordinates.toString(),
-                    destination.formattedAddress());
+                    destination.formattedAddress(),
+                    destination.locationContext());
         } catch (RestClientException ex) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
@@ -212,10 +214,21 @@ public class OpenRouteService {
     }
 
     /**
-     * Geocode địa chỉ khách và bias kết quả về gần vị trí nhà hàng.
+     * Geocode địa chỉ khách.
+     *
+     * Nếu khách đã nhập thêm phường/quận/tỉnh-thành sau dấu phẩy thì không bias
+     * kết quả về gần nhà hàng, vì focus.point có thể làm địa chỉ ở tỉnh/thành khác
+     * bị kéo nhầm về một đường cùng tên tại Đà Nẵng. Khi địa chỉ chỉ có số nhà +
+     * tên đường, vẫn giữ focus.point để ưu tiên kết quả gần nhà hàng.
      */
     private GeocodeResult geocodeDeliveryAddress(String address, Coordinate origin) {
-        return geocodeWithFallback(address, origin, GeocodeTarget.DELIVERY);
+        String expectedLocationContext = extractRequestedLocationContext(address);
+        Coordinate focusPoint = StringUtils.hasText(expectedLocationContext) ? null : origin;
+        return geocodeWithFallback(
+                address,
+                focusPoint,
+                GeocodeTarget.DELIVERY,
+                expectedLocationContext);
     }
 
     /**
@@ -232,6 +245,14 @@ public class OpenRouteService {
             String address,
             Coordinate focusPoint,
             GeocodeTarget target) {
+        return geocodeWithFallback(address, focusPoint, target, null);
+    }
+
+    private GeocodeResult geocodeWithFallback(
+            String address,
+            Coordinate focusPoint,
+            GeocodeTarget target,
+            String expectedLocationContext) {
         if (!StringUtils.hasText(address)) {
             throw geocodeNotFound(target);
         }
@@ -239,7 +260,7 @@ public class OpenRouteService {
         Set<String> candidates = buildAddressCandidates(address);
 
         for (String candidate : candidates) {
-            GeocodeResult result = tryGeocode(candidate, focusPoint);
+            GeocodeResult result = tryGeocode(candidate, focusPoint, expectedLocationContext);
             if (result != null) {
                 return result;
             }
@@ -265,20 +286,28 @@ public class OpenRouteService {
         // của OSM/Pelias chưa đồng nhất: thử lại đúng số nhà + tên đường.
         String streetOnly = keepStreetOnly(original);
         String streetOnlyWithoutRoadWord = keepStreetOnly(withoutRoadWord);
+        boolean hasExplicitLocationContext = StringUtils.hasText(extractRequestedLocationContext(original));
 
         addCandidate(candidates, original);
         addCandidate(candidates, withoutRoadWord);
         addCandidate(candidates, cityFallback);
         addCandidate(candidates, cityFallbackWithoutRoadWord);
-        addCandidate(candidates, streetOnly);
-        addCandidate(candidates, streetOnlyWithoutRoadWord);
+
+        // Nếu khách đã ghi rõ khu vực/tỉnh-thành, không được bỏ phần đó để chỉ tìm
+        // theo số nhà + tên đường vì có thể nhảy sang một tỉnh/thành khác.
+        if (!hasExplicitLocationContext) {
+            addCandidate(candidates, streetOnly);
+            addCandidate(candidates, streetOnlyWithoutRoadWord);
+        }
 
         addCandidate(candidates, appendVietnam(original));
         addCandidate(candidates, appendVietnam(withoutRoadWord));
         addCandidate(candidates, appendVietnam(cityFallback));
         addCandidate(candidates, appendVietnam(cityFallbackWithoutRoadWord));
-        addCandidate(candidates, appendVietnam(streetOnly));
-        addCandidate(candidates, appendVietnam(streetOnlyWithoutRoadWord));
+        if (!hasExplicitLocationContext) {
+            addCandidate(candidates, appendVietnam(streetOnly));
+            addCandidate(candidates, appendVietnam(streetOnlyWithoutRoadWord));
+        }
 
         // Cuối cùng mới thử bản không dấu.
         Set<String> current = new LinkedHashSet<>(candidates);
@@ -369,7 +398,10 @@ public class OpenRouteService {
      * Kết quả hành chính quá chung (city/region/country...) không được dùng làm
      * điểm giao.
      */
-    private GeocodeResult tryGeocode(String address, Coordinate focusPoint) {
+    private GeocodeResult tryGeocode(
+            String address,
+            Coordinate focusPoint,
+            String expectedLocationContext) {
         UriComponentsBuilder builder = UriComponentsBuilder
                 .fromUriString(properties.getGeocodeUrl().trim())
                 .queryParam("text", address)
@@ -409,6 +441,9 @@ public class OpenRouteService {
 
             for (JsonNode feature : features) {
                 if (isTooCoarse(feature)) {
+                    continue;
+                }
+                if (!matchesRequestedLocationContext(feature, expectedLocationContext)) {
                     continue;
                 }
 
@@ -470,9 +505,90 @@ public class OpenRouteService {
             label = fallbackAddress;
         }
 
+        String locationContext = buildLocationContext(propertiesNode, label);
+
         return new GeocodeResult(
                 new Coordinate(longitude, latitude),
-                label.trim());
+                label.trim(),
+                locationContext);
+    }
+
+    /**
+     * Lấy phần khu vực cuối cùng mà khách nhập sau dấu phẩy (bỏ "Việt Nam" nếu có).
+     * Ví dụ: "50A Hùng Vương, Phú Nhuận, Huế" -> "Huế".
+     */
+    private String extractRequestedLocationContext(String address) {
+        if (!StringUtils.hasText(address) || !address.contains(",")) {
+            return null;
+        }
+
+        String[] parts = address.split(",");
+        for (int index = parts.length - 1; index >= 1; index--) {
+            String part = cleanupSpaces(parts[index]);
+            if (!StringUtils.hasText(part)) {
+                continue;
+            }
+            String normalized = normalizeLocationText(part);
+            if ("viet nam".equals(normalized) || "vietnam".equals(normalized)) {
+                continue;
+            }
+            return part;
+        }
+        return null;
+    }
+
+    /**
+     * Không nhận một kết quả Pelias ở địa phương khác với khu vực khách đã ghi rõ.
+     */
+    private boolean matchesRequestedLocationContext(JsonNode feature, String expectedLocationContext) {
+        if (!StringUtils.hasText(expectedLocationContext)) {
+            return true;
+        }
+
+        String expected = normalizeLocationText(expectedLocationContext);
+        if (!StringUtils.hasText(expected)) {
+            return true;
+        }
+
+        JsonNode propertiesNode = feature.path("properties");
+        String actualContext = buildLocationContext(
+                propertiesNode,
+                propertiesNode.path("label").asText(""));
+        String actual = normalizeLocationText(actualContext);
+
+        return StringUtils.hasText(actual)
+                && (actual.contains(expected) || expected.contains(actual));
+    }
+
+    private String buildLocationContext(JsonNode propertiesNode, String label) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        addLocationContext(values, label);
+        addLocationContext(values, propertiesNode.path("name").asText(""));
+        addLocationContext(values, propertiesNode.path("neighbourhood").asText(""));
+        addLocationContext(values, propertiesNode.path("borough").asText(""));
+        addLocationContext(values, propertiesNode.path("locality").asText(""));
+        addLocationContext(values, propertiesNode.path("localadmin").asText(""));
+        addLocationContext(values, propertiesNode.path("county").asText(""));
+        addLocationContext(values, propertiesNode.path("region").asText(""));
+        addLocationContext(values, propertiesNode.path("macroregion").asText(""));
+        return String.join(", ", values);
+    }
+
+    private void addLocationContext(Set<String> values, String value) {
+        String cleaned = cleanupSpaces(value);
+        if (StringUtils.hasText(cleaned)) {
+            values.add(cleaned);
+        }
+    }
+
+    private String normalizeLocationText(String value) {
+        return removeVietnameseDiacritics(value == null ? "" : value)
+                .toLowerCase()
+                .replaceAll("[^a-z0-9 ]", " ")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .replaceFirst("^(thanh pho|tp|tinh|quan|huyen|thi xa|phuong|xa)\\s+", "")
+                .trim();
     }
 
     /**
@@ -532,13 +648,15 @@ public class OpenRouteService {
 
     private record GeocodeResult(
             Coordinate coordinate,
-            String formattedAddress) {
+            String formattedAddress,
+            String locationContext) {
     }
 
     public record RouteResult(
             int distanceMeters,
             long durationSeconds,
             String routeGeometry,
-            String resolvedAddress) {
+            String resolvedAddress,
+            String resolvedLocationContext) {
     }
 }

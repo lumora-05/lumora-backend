@@ -1006,11 +1006,31 @@ public class DeliveryOrderService {
             fullAddress = joinAddress(detailText, wardText, districtText, cityText);
         }
 
+        String supportedCityText = StringUtils.hasText(deliveryProperties.getSupportedCity())
+                ? deliveryProperties.getSupportedCity().trim()
+                : "Đà Nẵng";
+        String supportedCity = normalizeLocationKey(supportedCityText);
+
+        // Nếu frontend đã tách riêng tỉnh/thành phố thì chặn ngay trước khi gọi bản đồ.
+        if (StringUtils.hasText(cityText)
+                && !normalizeLocationKey(cityText).equals(supportedCity)) {
+            throw unsupportedDeliveryCity(supportedCityText);
+        }
+
         // Bản đồ miễn phí: backend tự geocode địa chỉ và tính tuyến đường bằng
         // openrouteservice (dữ liệu OpenStreetMap). Trình duyệt không cần API key.
         if (openRouteService.isConfigured() && StringUtils.hasText(fullAddress)) {
             validateTypedDeliveryAddress(fullAddress);
             OpenRouteService.RouteResult route = openRouteService.computeRouteToAddress(fullAddress);
+
+            // Với ô địa chỉ nhập tự do, xác minh lại địa phương mà Pelias thực sự trả về.
+            // Nhờ vậy địa chỉ ở Huế/Quảng Nam... không thể bị nhận nhầm thành đường cùng tên
+            // tại Đà Nẵng chỉ vì focus.point đặt gần nhà hàng.
+            String resolvedLocationContext = normalizeLocationKey(route.resolvedLocationContext());
+            if (StringUtils.hasText(resolvedLocationContext)
+                    && !resolvedLocationContext.contains(supportedCity)) {
+                throw unsupportedDeliveryCity(supportedCityText);
+            }
             double distanceKm = route.distanceMeters() / 1000.0d;
             double tier1 = positiveDoubleOrDefault(openRouteServiceProperties.getTier1DistanceKm(), 3.0d);
             double tier2 = positiveDoubleOrDefault(openRouteServiceProperties.getTier2DistanceKm(), 6.0d);
@@ -1069,16 +1089,8 @@ public class DeliveryOrderService {
 
         // Fallback giữ nguyên nghiệp vụ cũ nếu chưa cấu hình OPENROUTESERVICE_API_KEY.
         String normalizedCity = normalizeLocationKey(requiredText(city, "Tỉnh/thành phố không hợp lệ"));
-        String supportedCity = normalizeLocationKey(
-                StringUtils.hasText(deliveryProperties.getSupportedCity())
-                        ? deliveryProperties.getSupportedCity()
-                        : "Đà Nẵng"
-        );
         if (!normalizedCity.equals(supportedCity)) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Hiện tại nhà hàng chỉ hỗ trợ giao hàng trong " + deliveryProperties.getSupportedCity()
-            );
+            throw unsupportedDeliveryCity(supportedCityText);
         }
 
         if (!StringUtils.hasText(districtText)) {
@@ -1125,6 +1137,12 @@ public class DeliveryOrderService {
                 estimatedCustomerEtaSeconds(null),
                 null
         );
+    }
+
+    private ResponseStatusException unsupportedDeliveryCity(String supportedCity) {
+        return new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Hiện tại nhà hàng chỉ hỗ trợ giao hàng trong " + supportedCity);
     }
 
     private void validateTypedDeliveryAddress(String fullAddress) {
