@@ -106,6 +106,25 @@ public class RealtimeNotificationService {
         }
         send("/topic/delivery-orders", type, message, order);
         send("/topic/cashier/delivery-orders", type, message, order);
+        // Thu ngân là đầu mối theo dõi đơn online: phát cả trên kênh công việc chung
+        // để badge/trang thông báo được cập nhật ngay khi đơn thay đổi.
+        send("/topic/cashier", type, message, order);
+
+        if (Set.of("DELIVERY_ORDER_WAITING_PAYMENT", "DELIVERY_ORDER_SENT_TO_KITCHEN").contains(type)) {
+            boolean waitingPayment = "DELIVERY_ORDER_WAITING_PAYMENT".equals(type);
+            String orderCode = order.getMaDonHang() == null ? "mới" : "#DH" + order.getMaDonHang();
+            firebasePushNotificationService.sendToChannel(
+                    "CASHIER",
+                    waitingPayment ? "Có đơn online chờ thanh toán" : "Có đơn online mới",
+                    waitingPayment
+                            ? "Đơn " + orderCode + " đã được kiểm tra và đang chờ ghi nhận VietQR."
+                            : "Đơn " + orderCode + " đã được hệ thống xác nhận và chuyển xuống bếp.",
+                    "/cashier/delivery-orders",
+                    "cashier-delivery-order-" + (order.getMaDonHang() == null ? "latest" : order.getMaDonHang()),
+                    false
+            );
+        }
+
         if (order.getGiaoHang() != null
                 && order.getGiaoHang().getTrackingToken() != null
                 && !order.getGiaoHang().getTrackingToken().isBlank()) {
