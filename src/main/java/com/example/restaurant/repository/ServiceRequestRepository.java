@@ -16,6 +16,8 @@ public interface ServiceRequestRepository extends JpaRepository<ServiceRequest, 
 
     List<ServiceRequest> findByTrangThaiOrderByThoiGianTaoDesc(String trangThai);
 
+    long countByTrangThai(String trangThai);
+
     List<ServiceRequest> findByTrangThaiInOrderByThoiGianTaoAsc(Collection<String> trangThai);
 
     List<ServiceRequest> findByKhuVucIgnoreCaseOrderByThoiGianTaoDesc(String khuVuc);

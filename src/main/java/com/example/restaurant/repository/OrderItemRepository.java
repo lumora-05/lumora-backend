@@ -16,6 +16,16 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Integer> {
             Integer soLuong
     );
 
+    long countByTrangThaiMonAndSoLuongGreaterThanAndTrangThaiHuyIsNull(
+            String trangThaiMon,
+            Integer soLuong
+    );
+
+    long countByTrangThaiMonInAndSoLuongGreaterThanAndTrangThaiHuyIsNull(
+            java.util.Collection<String> trangThaiMon,
+            Integer soLuong
+    );
+
     List<OrderItem> findByTrangThaiHuyOrderByThoiGianYeuCauHuyDesc(String trangThaiHuy);
 
     boolean existsByMonAn_MaMonAn(Integer maMonAn);

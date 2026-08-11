@@ -15,25 +15,49 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class RealtimeNotificationService {
     private static final Logger log = LoggerFactory.getLogger(RealtimeNotificationService.class);
 
-    private final SimpMessagingTemplate messagingTemplate;
+    private static final Set<String> READY_FOR_SERVICE_STATUSES = Set.of(
+            "HOAN_THANH", "DA_HOAN_THANH", "SAN_SANG", "SAN_SANG_PHUC_VU"
+    );
 
-    public RealtimeNotificationService(SimpMessagingTemplate messagingTemplate) {
+    private final SimpMessagingTemplate messagingTemplate;
+    private final FirebasePushNotificationService firebasePushNotificationService;
+
+    public RealtimeNotificationService(SimpMessagingTemplate messagingTemplate,
+                                       FirebasePushNotificationService firebasePushNotificationService) {
         this.messagingTemplate = messagingTemplate;
+        this.firebasePushNotificationService = firebasePushNotificationService;
     }
 
     public void notifyNewOrder(Object data) {
         // Phục vụ nhận thông báo để theo dõi đơn mới; không cần xác nhận trước khi bếp chế biến.
         send("/topic/orders", "NEW_ORDER", "Có đơn hàng mới", data);
+        firebasePushNotificationService.sendToChannel(
+                "WAITER",
+                "Có đơn hàng mới",
+                "Khách vừa gửi đơn. Đơn đã được chuyển xuống bếp.",
+                "/waiter/orders",
+                "waiter-new-order",
+                false
+        );
     }
 
     public void notifyKitchenOrderConfirmed(Object data) {
         // Giữ tên hàm và loại sự kiện cũ để frontend hiện tại tiếp tục tương thích.
         send("/topic/kitchen", "NEW_KITCHEN_ORDER", "Có đơn hàng mới cần chế biến", data);
+        firebasePushNotificationService.sendToChannel(
+                "KITCHEN",
+                "Bếp có đơn mới",
+                "Có đơn hàng mới đang chờ bếp bắt đầu chế biến.",
+                "/kitchen/orders",
+                "kitchen-new-order",
+                true
+        );
     }
 
     public void notifyOrderItemsAdded(Order order, Object newItems, Integer callNumber, boolean notifyKitchen) {
@@ -49,8 +73,24 @@ public class RealtimeNotificationService {
         payload.put("tongTien", order.getTongTien());
 
         send("/topic/orders", "ORDER_ITEMS_ADDED", "Đơn hàng vừa được gọi thêm món", payload);
+        firebasePushNotificationService.sendToChannel(
+                "WAITER",
+                "Khách vừa gọi thêm món",
+                "Đơn #" + order.getMaDonHang() + " vừa có món gọi thêm và đã chuyển xuống bếp.",
+                "/waiter/orders/" + order.getMaDonHang(),
+                "waiter-order-items-added-" + order.getMaDonHang(),
+                false
+        );
         if (notifyKitchen) {
             send("/topic/kitchen", "NEW_KITCHEN_ITEMS", "Bếp có món gọi thêm cần chế biến", payload);
+            firebasePushNotificationService.sendToChannel(
+                    "KITCHEN",
+                    "Bếp có món gọi thêm",
+                    "Đơn #" + order.getMaDonHang() + " có món mới đang chờ chế biến.",
+                    "/kitchen/orders",
+                    "kitchen-new-items-" + order.getMaDonHang(),
+                    true
+            );
         }
         send("/topic/cashier", "ORDER_TOTAL_CHANGED", "Tổng tiền đơn hàng đã thay đổi", payload);
     }
@@ -87,6 +127,7 @@ public class RealtimeNotificationService {
     public void notifyKitchenItemStatusChanged(Object data) {
         send("/topic/kitchen", "KITCHEN_ITEM_STATUS_CHANGED", "Trạng thái món đã thay đổi", data);
         send("/topic/orders", "KITCHEN_ITEM_STATUS_CHANGED", "Món trong đơn hàng đã được cập nhật", data);
+        pushReadyItemToWaiter(data);
     }
 
     public void notifyOrderItemServed(Object data) {
@@ -116,6 +157,14 @@ public class RealtimeNotificationService {
     public void notifyServiceRequestCreated(ServiceRequest request) {
         send("/topic/service-requests", "SERVICE_REQUEST_CREATED", "Có yêu cầu phục vụ mới", request);
         send("/topic/admin/service-requests", "SERVICE_REQUEST_CREATED", "Có yêu cầu phục vụ mới", request);
+        firebasePushNotificationService.sendToChannel(
+                "WAITER",
+                "Có yêu cầu phục vụ mới",
+                (request.getTenBan() == null ? "Có bàn" : request.getTenBan()) + " đang chờ nhân viên tiếp nhận.",
+                "/waiter/requests",
+                "waiter-service-request-" + request.getMaYeuCau(),
+                true
+        );
         notifyCustomerServiceRequestChanged(request, "SERVICE_REQUEST_CREATED", "Yêu cầu đã được gửi");
     }
 
@@ -270,6 +319,52 @@ public class RealtimeNotificationService {
                 "Tồn kho nguyên liệu đã được bổ sung",
                 data
         );
+    }
+
+    private void pushReadyItemToWaiter(Object data) {
+        String status = null;
+        String itemName = "Có món";
+        Integer orderId = null;
+        Integer itemId = null;
+
+        if (data instanceof OrderItem item) {
+            status = item.getTrangThaiMon();
+            if (item.getMonAn() != null && item.getMonAn().getTenMonAn() != null) {
+                itemName = item.getMonAn().getTenMonAn();
+            }
+            orderId = item.getDonHang() == null ? null : item.getDonHang().getMaDonHang();
+            itemId = item.getMaChiTiet();
+        } else if (data instanceof Map<?, ?> map) {
+            Object rawStatus = map.get("trangThaiMon");
+            if (rawStatus == null) rawStatus = map.get("trangThai");
+            status = rawStatus == null ? null : String.valueOf(rawStatus);
+            Object rawName = map.get("tenMonAn");
+            if (rawName != null && !String.valueOf(rawName).isBlank()) itemName = String.valueOf(rawName);
+            orderId = integerValue(map.get("maDonHang"));
+            itemId = integerValue(map.get("maChiTiet"));
+        }
+
+        String normalizedStatus = status == null ? "" : status.trim().toUpperCase();
+        if (!READY_FOR_SERVICE_STATUSES.contains(normalizedStatus)) return;
+
+        firebasePushNotificationService.sendToChannel(
+                "WAITER",
+                "Món đã sẵn sàng phục vụ",
+                itemName + " đã hoàn thành, cần mang ra bàn.",
+                orderId == null ? "/waiter/orders" : "/waiter/orders/" + orderId,
+                "waiter-ready-item-" + (itemId == null ? "latest" : itemId),
+                true
+        );
+    }
+
+    private Integer integerValue(Object value) {
+        if (value instanceof Number number) return number.intValue();
+        if (value == null) return null;
+        try {
+            return Integer.valueOf(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     /**
