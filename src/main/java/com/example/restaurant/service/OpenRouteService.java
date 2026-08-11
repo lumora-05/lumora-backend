@@ -236,10 +236,27 @@ public class OpenRouteService {
             throw geocodeNotFound(target);
         }
 
-        Set<String> candidates = buildAddressCandidates(address);
+        String requiredAdministrativeArea = target == GeocodeTarget.DELIVERY
+                ? extractAdministrativeArea(address)
+                : "";
+
+        Set<String> candidates = buildAddressCandidates(address, target);
+
+        /*
+         * Khi khách đã nhập rõ tỉnh/thành thì chính địa danh đó phải là tiêu chí
+         * phân giải chính. Không bias về vị trí nhà hàng, nếu không một đường
+         * trùng tên ở Đà Nẵng có thể được xếp hạng cao hơn địa chỉ ở Huế.
+         */
+        Coordinate effectiveFocusPoint = target == GeocodeTarget.DELIVERY
+                && StringUtils.hasText(requiredAdministrativeArea)
+                        ? null
+                        : focusPoint;
 
         for (String candidate : candidates) {
-            GeocodeResult result = tryGeocode(candidate, focusPoint);
+            GeocodeResult result = tryGeocode(
+                    candidate,
+                    effectiveFocusPoint,
+                    requiredAdministrativeArea);
             if (result != null) {
                 return result;
             }
@@ -251,7 +268,7 @@ public class OpenRouteService {
     /**
      * Sinh các biến thể tìm kiếm theo thứ tự ưu tiên, vẫn giữ số nhà.
      */
-    private Set<String> buildAddressCandidates(String rawAddress) {
+    private Set<String> buildAddressCandidates(String rawAddress, GeocodeTarget target) {
         LinkedHashSet<String> candidates = new LinkedHashSet<>();
 
         String original = cleanupSpaces(rawAddress);
@@ -270,15 +287,30 @@ public class OpenRouteService {
         addCandidate(candidates, withoutRoadWord);
         addCandidate(candidates, cityFallback);
         addCandidate(candidates, cityFallbackWithoutRoadWord);
-        addCandidate(candidates, streetOnly);
-        addCandidate(candidates, streetOnlyWithoutRoadWord);
+
+        /*
+         * Nếu khách đã nhập tỉnh/thành (địa chỉ có dấu phẩy), không được fallback
+         * xuống chỉ còn số nhà + tên đường. Việc bỏ mất tỉnh/thành có thể khiến
+         * Pelias chọn một đường trùng tên gần nhà hàng ở địa phương khác.
+         *
+         * Giữ fallback cũ cho địa chỉ nhà hàng và cho trường hợp khách chỉ nhập
+         * một cụm địa chỉ không có phần tỉnh/thành để không làm thay đổi hành vi cũ.
+         */
+        boolean allowStreetOnlyFallback = target == GeocodeTarget.RESTAURANT
+                || !hasExplicitAdministrativeArea(original);
+        if (allowStreetOnlyFallback) {
+            addCandidate(candidates, streetOnly);
+            addCandidate(candidates, streetOnlyWithoutRoadWord);
+        }
 
         addCandidate(candidates, appendVietnam(original));
         addCandidate(candidates, appendVietnam(withoutRoadWord));
         addCandidate(candidates, appendVietnam(cityFallback));
         addCandidate(candidates, appendVietnam(cityFallbackWithoutRoadWord));
-        addCandidate(candidates, appendVietnam(streetOnly));
-        addCandidate(candidates, appendVietnam(streetOnlyWithoutRoadWord));
+        if (allowStreetOnlyFallback) {
+            addCandidate(candidates, appendVietnam(streetOnly));
+            addCandidate(candidates, appendVietnam(streetOnlyWithoutRoadWord));
+        }
 
         // Cuối cùng mới thử bản không dấu.
         Set<String> current = new LinkedHashSet<>(candidates);
@@ -364,12 +396,114 @@ public class OpenRouteService {
                 .replace('Đ', 'D');
     }
 
+    private boolean hasExplicitAdministrativeArea(String address) {
+        if (!StringUtils.hasText(address)) {
+            return false;
+        }
+
+        String[] parts = address.split(",");
+        return parts.length >= 2
+                && StringUtils.hasText(cleanupSpaces(parts[parts.length - 1]));
+    }
+
+    /**
+     * Lấy phần tỉnh/thành mà người dùng nhập ở cuối địa chỉ.
+     * Ví dụ: "50A Hùng Vương, Phú Nhuận, Huế" -> "hue".
+     */
+    private String extractAdministrativeArea(String address) {
+        if (!hasExplicitAdministrativeArea(address)) {
+            return "";
+        }
+
+        String[] parts = address.split(",");
+        return normalizeAdministrativeText(parts[parts.length - 1]);
+    }
+
+    private boolean matchesAdministrativeArea(
+            JsonNode feature,
+            String requiredAdministrativeArea) {
+        if (!StringUtils.hasText(requiredAdministrativeArea)) {
+            return true;
+        }
+
+        JsonNode propertiesNode = feature.path("properties");
+
+        StringBuilder administrativeText = new StringBuilder();
+        appendAdministrativeValue(administrativeText, propertiesNode.path("label").asText(""));
+        appendAdministrativeValue(administrativeText, propertiesNode.path("region").asText(""));
+        appendAdministrativeValue(administrativeText, propertiesNode.path("region_a").asText(""));
+        appendAdministrativeValue(administrativeText, propertiesNode.path("county").asText(""));
+        appendAdministrativeValue(administrativeText, propertiesNode.path("localadmin").asText(""));
+        appendAdministrativeValue(administrativeText, propertiesNode.path("locality").asText(""));
+        appendAdministrativeValue(administrativeText, propertiesNode.path("borough").asText(""));
+
+        String normalizedFeatureArea = normalizeAdministrativeText(administrativeText.toString());
+        return containsAdministrativeArea(
+                normalizedFeatureArea,
+                requiredAdministrativeArea);
+    }
+
+    private void appendAdministrativeValue(StringBuilder builder, String value) {
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+
+        if (builder.length() > 0) {
+            builder.append(' ');
+        }
+        builder.append(value);
+    }
+
+    private boolean containsAdministrativeArea(
+            String normalizedFeatureArea,
+            String normalizedRequiredArea) {
+        if (!StringUtils.hasText(normalizedFeatureArea)
+                || !StringUtils.hasText(normalizedRequiredArea)) {
+            return false;
+        }
+
+        if (normalizedFeatureArea.contains(normalizedRequiredArea)) {
+            return true;
+        }
+
+        /*
+         * Một số cách viết phổ biến có thể khác label của Pelias.
+         * Chuẩn hóa riêng TP.HCM để tránh làm địa chỉ hợp lệ bị loại.
+         */
+        if ("hcm".equals(normalizedRequiredArea)
+                || "tphcm".equals(normalizedRequiredArea)
+                || "sai gon".equals(normalizedRequiredArea)
+                || "saigon".equals(normalizedRequiredArea)) {
+            return normalizedFeatureArea.contains("ho chi minh");
+        }
+
+        return false;
+    }
+
+    private String normalizeAdministrativeText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+
+        String normalized = removeVietnameseDiacritics(value)
+                .toLowerCase()
+                .replaceAll("(?iu)\\b(thanh pho|tp\\.?|tinh|province|city)\\b", " ")
+                .replaceAll("[^a-z0-9]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        return normalized;
+    }
+
     /**
      * Gọi Pelias một lần cho một candidate.
      * Kết quả hành chính quá chung (city/region/country...) không được dùng làm
      * điểm giao.
      */
-    private GeocodeResult tryGeocode(String address, Coordinate focusPoint) {
+    private GeocodeResult tryGeocode(
+            String address,
+            Coordinate focusPoint,
+            String requiredAdministrativeArea) {
         UriComponentsBuilder builder = UriComponentsBuilder
                 .fromUriString(properties.getGeocodeUrl().trim())
                 .queryParam("text", address)
@@ -409,6 +543,15 @@ public class OpenRouteService {
 
             for (JsonNode feature : features) {
                 if (isTooCoarse(feature)) {
+                    continue;
+                }
+
+                /*
+                 * Nếu khách đã nhập rõ tỉnh/thành, chỉ chấp nhận feature thuộc
+                 * đúng khu vực đó. Ví dụ nhập "... Huế" thì kết quả ở Đà Nẵng
+                 * phải bị loại dù nó nằm gần nhà hàng hơn.
+                 */
+                if (!matchesAdministrativeArea(feature, requiredAdministrativeArea)) {
                     continue;
                 }
 
