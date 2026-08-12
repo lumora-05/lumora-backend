@@ -100,43 +100,6 @@ public class RealtimeNotificationService {
         send("/topic/cashier", "ORDER_STATUS_CHANGED", "Thu ngân nhận cập nhật đơn hàng", data);
     }
 
-    public void notifyDeliveryOrderChanged(String type, String message, Order order) {
-        if (order == null) {
-            return;
-        }
-        send("/topic/delivery-orders", type, message, order);
-        send("/topic/cashier/delivery-orders", type, message, order);
-        // Thu ngân là đầu mối theo dõi đơn online: phát cả trên kênh công việc chung
-        // để badge/trang thông báo được cập nhật ngay khi đơn thay đổi.
-        send("/topic/cashier", type, message, order);
-
-        if (Set.of("DELIVERY_ORDER_WAITING_PAYMENT", "DELIVERY_ORDER_SENT_TO_KITCHEN").contains(type)) {
-            boolean waitingPayment = "DELIVERY_ORDER_WAITING_PAYMENT".equals(type);
-            String orderCode = order.getMaDonHang() == null ? "mới" : "#DH" + order.getMaDonHang();
-            firebasePushNotificationService.sendToChannel(
-                    "CASHIER",
-                    waitingPayment ? "Có đơn online chờ thanh toán" : "Có đơn online mới",
-                    waitingPayment
-                            ? "Đơn " + orderCode + " đã được kiểm tra và đang chờ ghi nhận VietQR."
-                            : "Đơn " + orderCode + " đã được hệ thống xác nhận và chuyển xuống bếp.",
-                    "/cashier/delivery-orders",
-                    "cashier-delivery-order-" + (order.getMaDonHang() == null ? "latest" : order.getMaDonHang()),
-                    false
-            );
-        }
-
-        if (order.getGiaoHang() != null
-                && order.getGiaoHang().getTrackingToken() != null
-                && !order.getGiaoHang().getTrackingToken().isBlank()) {
-            send(
-                    "/topic/customer/delivery/" + order.getGiaoHang().getTrackingToken(),
-                    type,
-                    message,
-                    order
-            );
-        }
-    }
-
     public void notifyOrderPricingChanged(Order order) {
         send("/topic/orders", "ORDER_PRICING_CHANGED", "Khuyến mãi hoặc tổng tiền đơn hàng đã thay đổi", order);
         send("/topic/cashier", "ORDER_PRICING_CHANGED", "Tổng thanh toán của đơn hàng đã thay đổi", order);
@@ -274,16 +237,6 @@ public class RealtimeNotificationService {
                     "/topic/customer/tables/" + order.getBanAn().getMaBan(),
                     "CUSTOMER_TABLE_ORDER_UPDATED",
                     "Đơn hàng tại bàn đã được cập nhật",
-                    order
-            );
-        }
-        if (order.getGiaoHang() != null
-                && order.getGiaoHang().getTrackingToken() != null
-                && !order.getGiaoHang().getTrackingToken().isBlank()) {
-            send(
-                    "/topic/customer/delivery/" + order.getGiaoHang().getTrackingToken(),
-                    "CUSTOMER_DELIVERY_ORDER_UPDATED",
-                    "Đơn giao hàng đã được cập nhật",
                     order
             );
         }
@@ -456,10 +409,6 @@ public class RealtimeNotificationService {
         payload.put("trangThai", order.getTrangThai());
         payload.put("loaiDon", order.getLoaiDon());
         payload.put("nguonDon", order.getNguonDon());
-        payload.put("maVanChuyen", order.getGiaoHang() == null ? null : order.getGiaoHang().getMaVanChuyen());
-        payload.put("trangThaiGiaoHang", order.getGiaoHang() == null ? null : order.getGiaoHang().getTrangThaiGiaoHang());
-        payload.put("tenNguoiNhan", order.getGiaoHang() == null ? null : order.getGiaoHang().getTenNguoiNhan());
-        payload.put("phiGiaoHang", order.getGiaoHang() == null ? null : order.getGiaoHang().getPhiGiaoHang());
         payload.put("maCodeKhuyenMai", order.getKhuyenMai() == null ? null : order.getKhuyenMai().getMaCode());
         payload.put("tamTinh", order.getTamTinh());
         payload.put("tienGiam", order.getTienGiam());

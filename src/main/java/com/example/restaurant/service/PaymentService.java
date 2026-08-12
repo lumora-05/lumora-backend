@@ -14,7 +14,6 @@ import com.example.restaurant.entity.Order;
 import com.example.restaurant.entity.OrderItem;
 import com.example.restaurant.repository.EmployeeRepository;
 import com.example.restaurant.repository.InvoiceRepository;
-import com.example.restaurant.repository.OrderDeliveryRepository;
 import com.example.restaurant.repository.OrderRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -67,7 +66,6 @@ public class PaymentService {
     private static final Pattern SAFE_PATH_PART = Pattern.compile("[A-Za-z0-9_]+");
 
     private final InvoiceRepository invoiceRepository;
-    private final OrderDeliveryRepository orderDeliveryRepository;
     private final OrderRepository orderRepository;
     private final EmployeeRepository employeeRepository;
     private final RealtimeNotificationService realtimeNotificationService;
@@ -79,7 +77,6 @@ public class PaymentService {
     private final LoyaltyService loyaltyService;
 
     public PaymentService(InvoiceRepository invoiceRepository,
-                          OrderDeliveryRepository orderDeliveryRepository,
                           OrderRepository orderRepository,
                           EmployeeRepository employeeRepository,
                           RealtimeNotificationService realtimeNotificationService,
@@ -90,7 +87,6 @@ public class PaymentService {
                           ReservationService reservationService,
                           LoyaltyService loyaltyService) {
         this.invoiceRepository = invoiceRepository;
-        this.orderDeliveryRepository = orderDeliveryRepository;
         this.orderRepository = orderRepository;
         this.employeeRepository = employeeRepository;
         this.realtimeNotificationService = realtimeNotificationService;
@@ -134,8 +130,7 @@ public class PaymentService {
                 : null;
 
         if (transactionCode != null
-                && (invoiceRepository.existsByMaGiaoDichIgnoreCase(transactionCode)
-                || orderDeliveryRepository.existsByMaGiaoDichIgnoreCase(transactionCode))) {
+                && invoiceRepository.existsByMaGiaoDichIgnoreCase(transactionCode)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã giao dịch đã được sử dụng");
         }
 
@@ -146,7 +141,7 @@ public class PaymentService {
         invoice.setKhachHang(loyalty.customer());
         invoice.setTamTinh(normalizedMoney(order.getTamTinh()));
         invoice.setTienGiam(normalizedMoney(order.getTienGiam()));
-        invoice.setPhiGiaoHang(deliveryFeeOf(order));
+        invoice.setPhiGiaoHang(BigDecimal.ZERO.setScale(2));
         invoice.setDiemDaSuDung(loyalty.pointsUsed());
         invoice.setTienGiamTuDiem(loyalty.pointDiscount());
         invoice.setDiemDuocCong(loyalty.pointsEarned());
@@ -190,111 +185,6 @@ public class PaymentService {
         );
         realtimeNotificationService.notifyPaymentCompleted(savedInvoice);
         realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
-        realtimeNotificationService.notifyDashboardRefresh(savedInvoice);
-        return savedInvoice;
-    }
-
-    /**
-     * Tạo VietQR cho đơn giao hàng trước khi nhà hàng xác nhận chế biến.
-     * Khác đơn tại bàn, đơn giao hàng chưa ở trạng thái CHO_THANH_TOAN.
-     */
-    @Transactional(readOnly = true)
-    public VietQrResponse createVietQrForDelivery(Integer orderId) {
-        if (orderId == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã đơn hàng không hợp lệ");
-        }
-        Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Không tìm thấy đơn hàng: " + orderId
-                ));
-        if (!"GIAO_HANG".equals(normalizeText(order.getLoaiDon())) || order.getGiaoHang() == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn giao hàng");
-        }
-        if (invoiceRepository.findByDonHang_MaDonHang(orderId).isPresent()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng đã có hóa đơn");
-        }
-        orderPricingService.recalculate(order);
-        if (order.getTongTien() == null || order.getTongTien().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tổng tiền đơn hàng không hợp lệ");
-        }
-        return buildVietQr(order);
-    }
-
-    /**
-     * Tạo hóa đơn khi đơn giao hàng được xác nhận giao thành công.
-     * Không giải phóng bàn vì đơn giao hàng không gắn với bàn ăn.
-     */
-    @Transactional
-    public Invoice completeDeliveryPayment(Order order, String username) {
-        if (order == null || order.getMaDonHang() == null
-                || !"GIAO_HANG".equals(normalizeText(order.getLoaiDon()))
-                || order.getGiaoHang() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Đơn giao hàng không hợp lệ");
-        }
-
-        Invoice existing = invoiceRepository.findByDonHang_MaDonHang(order.getMaDonHang()).orElse(null);
-        if (existing != null) {
-            order.setTrangThai("DA_THANH_TOAN");
-            return existing;
-        }
-
-        orderPricingService.recalculate(order);
-        Employee cashier = requireCashierOrAdmin(username);
-        String deliveryPaymentMethod = normalizeText(order.getGiaoHang().getPhuongThucThanhToan());
-        String invoiceMethod = "VIETQR".equals(deliveryPaymentMethod)
-                ? METHOD_BANK_TRANSFER
-                : METHOD_CASH;
-        String transactionCode = METHOD_BANK_TRANSFER.equals(invoiceMethod)
-                ? normalizeTransactionCode(order.getGiaoHang().getMaGiaoDich())
-                : null;
-        if (METHOD_BANK_TRANSFER.equals(invoiceMethod) && transactionCode == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Đơn VietQR chưa có mã giao dịch đã được xác nhận"
-            );
-        }
-        if (transactionCode != null && invoiceRepository.existsByMaGiaoDichIgnoreCase(transactionCode)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã giao dịch đã được sử dụng");
-        }
-
-        LocalDateTime paidAt = LocalDateTime.now();
-        Invoice invoice = new Invoice();
-        invoice.setDonHang(order);
-        invoice.setNhanVien(cashier);
-        invoice.setTamTinh(normalizedMoney(order.getTamTinh()));
-        invoice.setTienGiam(normalizedMoney(order.getTienGiam()));
-        invoice.setPhiGiaoHang(deliveryFeeOf(order));
-        invoice.setDiemDaSuDung(0);
-        invoice.setTienGiamTuDiem(BigDecimal.ZERO.setScale(2));
-        invoice.setDiemDuocCong(0);
-        invoice.setMaCodeKhuyenMai(order.getKhuyenMai() == null ? null : order.getKhuyenMai().getMaCode());
-        invoice.setTongTien(normalizedMoney(order.getTongTien()));
-        invoice.setThoiGianTao(paidAt);
-        invoice.setThoiGianThanhToan(paidAt);
-        invoice.setPhuongThucThanhToan(invoiceMethod);
-        invoice.setTrangThaiThanhToan("DA_THANH_TOAN");
-        invoice.setTienKhachDua(METHOD_CASH.equals(invoiceMethod) ? normalizedMoney(order.getTongTien()) : null);
-        invoice.setTienThua(BigDecimal.ZERO.setScale(2));
-        invoice.setMaGiaoDich(transactionCode);
-        invoice.setGhiChu("Thanh toán đơn giao hàng " + order.getGiaoHang().getMaVanChuyen());
-        invoice.setNoiDungChuyenKhoan(
-                METHOD_BANK_TRANSFER.equals(invoiceMethod)
-                        ? buildTransferDescription(order.getMaDonHang())
-                        : null
-        );
-
-        Invoice savedInvoice = invoiceRepository.saveAndFlush(invoice);
-        order.setTrangThai("DA_THANH_TOAN");
-        orderRepository.saveAndFlush(order);
-
-        systemActivityService.record(
-                "DELIVERY_PAYMENT_COMPLETED",
-                "Đơn giao hàng #DH" + order.getMaDonHang() + " đã hoàn tất thanh toán",
-                order.getMaDonHang()
-        );
-        realtimeNotificationService.notifyPaymentCompleted(savedInvoice);
-        realtimeNotificationService.notifyCustomerOrderChanged(order);
         realtimeNotificationService.notifyDashboardRefresh(savedInvoice);
         return savedInvoice;
     }
@@ -456,42 +346,6 @@ public class PaymentService {
             );
         }
         return cashier;
-    }
-
-    private Employee requireCashierOrAdmin(String username) {
-        String normalizedUsername = trimToNull(username);
-        if (normalizedUsername == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.UNAUTHORIZED,
-                    "Không xác định được tài khoản đang đăng nhập"
-            );
-        }
-
-        Employee employee = employeeRepository.findByTenDangNhap(normalizedUsername)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Không tìm thấy nhân viên từ tài khoản đăng nhập"
-                ));
-        String roleName = employee.getVaiTro() == null
-                ? ""
-                : normalizeText(employee.getVaiTro().getTenVaiTro()).replace("ROLE_", "");
-        if (!Set.of("CASHIER", "ADMIN").contains(roleName)) {
-            throw new ResponseStatusException(
-                    HttpStatus.FORBIDDEN,
-                    "Chỉ thu ngân hoặc quản trị viên được xác nhận giao hàng thành công"
-            );
-        }
-        if (!"DANG_LAM_VIEC".equals(normalizeText(employee.getTrangThai()))) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nhân viên hiện không còn làm việc");
-        }
-        return employee;
-    }
-
-    private BigDecimal deliveryFeeOf(Order order) {
-        if (order == null || order.getGiaoHang() == null || order.getGiaoHang().getPhiGiaoHang() == null) {
-            return BigDecimal.ZERO.setScale(2);
-        }
-        return normalizedMoney(order.getGiaoHang().getPhiGiaoHang());
     }
 
     private String normalizePaymentMethod(String rawMethod) {

@@ -209,28 +209,7 @@ public class PromotionService {
      * trước khi đơn được chuyển xuống bếp hoặc mở bước thanh toán VietQR.
      */
     @Transactional
-    public void applyToNewOrder(Order order, String rawCode) {
-        if (order == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Đơn hàng không hợp lệ để áp dụng khuyến mãi");
-        }
-        String code = normalizeCode(rawCode);
-        Promotion promotion = promotionRepository.findActiveByCodeForUpdate(code)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Mã khuyến mãi không hợp lệ hoặc đã tắt"
-                ));
-
-        BigDecimal subtotal = orderPricingService.calculateSubtotal(order);
-        validatePromotionCanBeApplied(promotion, subtotal);
-        incrementUsage(promotion);
-        promotionRepository.save(promotion);
-
-        order.setKhuyenMai(promotion);
-        order.setThoiGianApDungKhuyenMai(LocalDateTime.now());
-        orderPricingService.recalculate(order);
-    }
-
-    /**
+        /**
      * Áp dụng hoặc thay thế mã khuyến mãi cho đơn hàng. Việc khóa cả đơn và mã
      * giúp hai request đồng thời không thể trừ tiền hoặc vượt lượt sử dụng.
      */
