@@ -52,11 +52,23 @@ public class OrderDelivery {
     @Column(name = "so_dien_thoai_nhan", length = 20, nullable = false)
     private String soDienThoaiNhan;
 
+    @Column(name = "email_nguoi_nhan", length = 120)
+    private String emailNguoiNhan;
+
     @Column(name = "dia_chi_giao_hang", length = 500, nullable = false)
     private String diaChiGiaoHang;
 
     @Column(name = "dia_chi_chi_tiet", length = 500)
     private String diaChiChiTiet;
+
+    @Column(name = "so_nha", length = 50)
+    private String soNha;
+
+    @Column(name = "ten_duong", length = 200)
+    private String tenDuong;
+
+    @Column(name = "thong_tin_dia_chi", length = 500)
+    private String thongTinDiaChi;
 
     @Column(name = "phuong_xa", length = 120)
     private String phuongXa;
@@ -87,6 +99,13 @@ public class OrderDelivery {
 
     @Column(name = "ghi_chu_giao_hang", length = 500)
     private String ghiChuGiaoHang;
+
+    /** SOM_NHAT hoặc HEN_GIO. */
+    @Column(name = "loai_thoi_gian_nhan", length = 20, nullable = false)
+    private String loaiThoiGianNhan = "SOM_NHAT";
+
+    @Column(name = "thoi_gian_nhan_mong_muon")
+    private LocalDateTime thoiGianNhanMongMuon;
 
     @Column(name = "phi_giao_hang", precision = 12, scale = 2, nullable = false)
     private BigDecimal phiGiaoHang = BigDecimal.ZERO;
@@ -120,9 +139,9 @@ public class OrderDelivery {
     @Column(name = "da_canh_bao_cho_xac_nhan", nullable = false)
     private Boolean daCanhBaoChoXacNhan = false;
 
-    /** CHO_THANH_TOAN, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, CHO_DOI_SOAT (nội bộ), HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
+    /** CHO_THANH_TOAN, CHO_XAC_NHAN, CHO_DEN_GIO, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, CHO_DOI_SOAT (nội bộ), HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
     @Column(name = "trang_thai_giao_hang", length = 30, nullable = false)
-    private String trangThaiGiaoHang = "DANG_CHUAN_BI";
+    private String trangThaiGiaoHang = "CHO_XAC_NHAN";
 
     @Column(name = "don_vi_van_chuyen", length = 120)
     private String donViVanChuyen;
@@ -208,7 +227,10 @@ public class OrderDelivery {
             trangThaiThanhToan = "CHO_THANH_TOAN";
         }
         if (trangThaiGiaoHang == null || trangThaiGiaoHang.isBlank()) {
-            trangThaiGiaoHang = "DANG_CHUAN_BI";
+            trangThaiGiaoHang = "CHO_XAC_NHAN";
+        }
+        if (loaiThoiGianNhan == null || loaiThoiGianNhan.isBlank()) {
+            loaiThoiGianNhan = "SOM_NHAT";
         }
     }
 
@@ -232,6 +254,9 @@ public class OrderDelivery {
         }
         if (googleMaps == null) {
             googleMaps = false;
+        }
+        if (loaiThoiGianNhan == null || loaiThoiGianNhan.isBlank()) {
+            loaiThoiGianNhan = "SOM_NHAT";
         }
     }
 }

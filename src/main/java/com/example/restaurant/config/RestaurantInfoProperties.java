@@ -12,7 +12,7 @@ public class RestaurantInfoProperties {
     private String email = "Chưa cập nhật";
     private String openingHours = "Chưa cập nhật";
     private String reservationUrl = "/reservations";
-    private String menuUrl = "/#menu";
+    private String menuUrl = "/menu";
 
     public String getName() {
         return name;

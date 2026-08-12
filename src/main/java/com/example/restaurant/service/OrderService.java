@@ -130,6 +130,7 @@ public class OrderService {
     private final TableArrangementService tableArrangementService;
     private final ReservationService reservationService;
     private final FoodTraceabilityService foodTraceabilityService;
+    private final DeliveryOrderService deliveryOrderService;
 
     public OrderService(OrderRepository orderRepository,
                         OrderItemRepository orderItemRepository,
@@ -142,7 +143,8 @@ public class OrderService {
                         PromotionService promotionService,
                         TableArrangementService tableArrangementService,
                         ReservationService reservationService,
-                        FoodTraceabilityService foodTraceabilityService) {
+                        FoodTraceabilityService foodTraceabilityService,
+                        DeliveryOrderService deliveryOrderService) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.diningTableRepository = diningTableRepository;
@@ -155,12 +157,11 @@ public class OrderService {
         this.tableArrangementService = tableArrangementService;
         this.reservationService = reservationService;
         this.foodTraceabilityService = foodTraceabilityService;
+        this.deliveryOrderService = deliveryOrderService;
     }
 
     public List<Order> findAll() {
-        return orderRepository.findAll().stream()
-                .filter(order -> !order.isDeliveryOrder())
-                .toList();
+        return orderRepository.findAll();
     }
 
     @Transactional(readOnly = true)
@@ -182,14 +183,20 @@ public class OrderService {
                                 LocalDate to,
                                 boolean kitchenOnly,
                                 String waiterUsername) {
-        Specification<Order> specification = (root, query, criteriaBuilder) -> criteriaBuilder.or(
-                criteriaBuilder.isNull(root.get("loaiDon")),
-                criteriaBuilder.notEqual(criteriaBuilder.upper(root.get("loaiDon")), "GIAO_HANG")
-        );
+        Specification<Order> specification = (root, query, criteriaBuilder) -> criteriaBuilder.conjunction();
 
         if (kitchenOnly) {
-            specification = specification.and((root, query, criteriaBuilder) ->
-                    criteriaBuilder.notEqual(criteriaBuilder.upper(root.get("trangThai")), "CHO_XAC_NHAN"));
+            specification = specification.and((root, query, criteriaBuilder) -> {
+                var statusExpr = criteriaBuilder.upper(root.<String>get("trangThai"));
+                var typeExpr = criteriaBuilder.upper(criteriaBuilder.coalesce(root.<String>get("loaiDon"), "TAI_BAN"));
+                return criteriaBuilder.and(
+                        criteriaBuilder.notEqual(statusExpr, "CHO_XAC_NHAN"),
+                        criteriaBuilder.or(
+                                criteriaBuilder.notEqual(typeExpr, "GIAO_HANG"),
+                                criteriaBuilder.not(statusExpr.in("CHO_THANH_TOAN", "CHO_DEN_GIO"))
+                        )
+                );
+            });
         }
 
         if (StringUtils.hasText(waiterUsername)) {
@@ -214,6 +221,7 @@ public class OrderService {
             Integer orderId = parseInteger(normalizedKeyword);
             specification = specification.and((root, query, criteriaBuilder) -> {
                 var tableJoin = root.join("banAn", JoinType.LEFT);
+                var deliveryJoin = root.join("giaoHang", JoinType.LEFT);
                 var byTable = criteriaBuilder.like(
                         criteriaBuilder.lower(criteriaBuilder.coalesce(tableJoin.<String>get("tenBan"), "")),
                         pattern
@@ -222,12 +230,27 @@ public class OrderService {
                         criteriaBuilder.lower(root.get("trangThai")),
                         pattern
                 );
+                var byRecipient = criteriaBuilder.like(
+                        criteriaBuilder.lower(criteriaBuilder.coalesce(deliveryJoin.<String>get("tenNguoiNhan"), "")),
+                        pattern
+                );
+                var byShippingCode = criteriaBuilder.like(
+                        criteriaBuilder.lower(criteriaBuilder.coalesce(deliveryJoin.<String>get("maVanChuyen"), "")),
+                        pattern
+                );
+                var byPhone = criteriaBuilder.like(
+                        criteriaBuilder.lower(criteriaBuilder.coalesce(deliveryJoin.<String>get("soDienThoaiNhan"), "")),
+                        pattern
+                );
                 return orderId == null
-                        ? criteriaBuilder.or(byTable, byStatus)
+                        ? criteriaBuilder.or(byTable, byStatus, byRecipient, byShippingCode, byPhone)
                         : criteriaBuilder.or(
                                 criteriaBuilder.equal(root.get("maDonHang"), orderId),
                                 byTable,
-                                byStatus
+                                byStatus,
+                                byRecipient,
+                                byShippingCode,
+                                byPhone
                         );
             });
         }
@@ -263,17 +286,16 @@ public class OrderService {
      */
     public List<Order> findAllForKitchen() {
         return orderRepository.findAll().stream()
-                .filter(order -> !order.isDeliveryOrder())
-                .filter(order -> !"CHO_XAC_NHAN".equals(normalizeStatus(order.getTrangThai())))
+                .filter(order -> !isHiddenFromKitchen(order))
                 .toList();
     }
 
     public Order findByIdForKitchen(Integer id) {
         Order order = findById(id);
-        if ("CHO_XAC_NHAN".equals(normalizeStatus(order.getTrangThai()))) {
+        if (isHiddenFromKitchen(order)) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
-                    "Đơn hàng chưa được nhân viên phục vụ xác nhận"
+                    "Đơn hàng chưa đến bước bếp được phép xử lý"
             );
         }
         return order;
@@ -281,18 +303,13 @@ public class OrderService {
 
     public List<Order> findByStatusForKitchen(String status) {
         String normalized = normalizeStatus(status);
-        if ("CHO_XAC_NHAN".equals(normalized)) {
-            return List.of();
-        }
         return orderRepository.findByTrangThai(normalized).stream()
-                .filter(order -> !order.isDeliveryOrder())
+                .filter(order -> !isHiddenFromKitchen(order))
                 .toList();
     }
 
     public List<Order> findByStatus(String status) {
-        return orderRepository.findByTrangThai(normalizeStatus(status)).stream()
-                .filter(order -> !order.isDeliveryOrder())
-                .toList();
+        return orderRepository.findByTrangThai(normalizeStatus(status));
     }
 
     @Transactional(readOnly = true)
@@ -312,9 +329,19 @@ public class OrderService {
     public List<OrderItem> findKitchenItems(String status) {
         return orderItemRepository.findByTrangThaiMon(normalizeStatus(status)).stream()
                 .filter(item -> item.getDonHang() != null)
-                .filter(item -> !item.getDonHang().isDeliveryOrder())
-                .filter(item -> !"CHO_XAC_NHAN".equals(normalizeStatus(item.getDonHang().getTrangThai())))
+                .filter(item -> !isHiddenFromKitchen(item.getDonHang()))
                 .toList();
+    }
+
+    private boolean isHiddenFromKitchen(Order order) {
+        if (order == null) {
+            return true;
+        }
+        String status = normalizeStatus(order.getTrangThai());
+        if ("CHO_XAC_NHAN".equals(status)) {
+            return true;
+        }
+        return order.isDeliveryOrder() && Set.of("CHO_THANH_TOAN", "CHO_DEN_GIO").contains(status);
     }
 
     public Order findById(Integer id) {
@@ -750,6 +777,7 @@ public class OrderService {
         if (isCookingItemStatus(currentItemStatus)) {
             item.setTrangThaiMon(ITEM_CANCELLATION_HOLD_STATUS);
             item.setTrangThaiHuy(ITEM_CANCELLATION_PENDING);
+            deliveryOrderService.synchronizeAfterKitchenUpdate(order);
             OrderItem savedItem = orderItemRepository.save(item);
             Order savedOrder = orderRepository.saveAndFlush(order);
             publishItemCancellationRequested(savedOrder, savedItem, actor.getHoTen());
@@ -906,6 +934,7 @@ public class OrderService {
         item.setThoiGianXuLyHuy(LocalDateTime.now());
         item.setGhiChuXuLyHuy(trimToNull(request == null ? null : request.ghiChu()));
         synchronizeOrderStatusFromItems(order);
+        deliveryOrderService.synchronizeAfterKitchenUpdate(order);
 
         OrderItem savedItem = orderItemRepository.save(item);
         Order savedOrder = orderRepository.saveAndFlush(order);
@@ -1074,6 +1103,7 @@ public class OrderService {
         item.setTrangThaiMon(newItemStatus);
         OrderItem savedItem = orderItemRepository.save(item);
         synchronizeOrderStatusFromItems(order);
+        deliveryOrderService.synchronizeAfterKitchenUpdate(order);
         orderPricingService.recalculate(order);
         orderRepository.saveAndFlush(order);
 
@@ -1216,6 +1246,7 @@ public class OrderService {
         } else {
             synchronizeOrderStatusFromItems(order);
         }
+        deliveryOrderService.synchronizeAfterKitchenUpdate(order);
     }
 
     private void validatePendingCancellation(OrderItem item) {

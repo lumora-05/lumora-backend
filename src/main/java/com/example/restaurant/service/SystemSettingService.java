@@ -295,7 +295,7 @@ public class SystemSettingService {
         setting.setEmail(cleanOptional(restaurantInfoProperties.getEmail()));
         setting.setGioMoCua(cleanOptional(restaurantInfoProperties.getOpeningHours()));
         setting.setReservationUrl(defaultIfBlank(restaurantInfoProperties.getReservationUrl(), "/reservations"));
-        setting.setMenuUrl(defaultIfBlank(restaurantInfoProperties.getMenuUrl(), "/#menu"));
+        setting.setMenuUrl(defaultIfBlank(restaurantInfoProperties.getMenuUrl(), "/menu"));
 
         setting.setReservationDefaultDurationMinutes(DEFAULT_RESERVATION_DURATION_MINUTES);
         setting.setReservationPreparationMinutes(DEFAULT_RESERVATION_PREPARATION_MINUTES);
@@ -467,7 +467,7 @@ public class SystemSettingService {
         restaurantInfoProperties.setEmail(defaultIfBlank(setting.getEmail(), "Chưa cập nhật"));
         restaurantInfoProperties.setOpeningHours(defaultIfBlank(setting.getGioMoCua(), "Chưa cập nhật"));
         restaurantInfoProperties.setReservationUrl(defaultIfBlank(setting.getReservationUrl(), "/reservations"));
-        restaurantInfoProperties.setMenuUrl(defaultIfBlank(setting.getMenuUrl(), "/#menu"));
+        restaurantInfoProperties.setMenuUrl(defaultIfBlank(setting.getMenuUrl(), "/menu"));
 
         // Đặt bàn
         reservationPolicyProperties.setDefaultDurationMinutes(
