@@ -5,7 +5,8 @@ import jakarta.validation.constraints.Size;
 
 public record DeliveryQuoteRequest(
         @NotBlank @Size(max = 100) String tinhThanh,
-        @NotBlank @Size(max = 100) String quanHuyen,
+        /** Trường tương thích với client cũ; không còn bắt buộc trong mô hình địa chỉ 2 cấp. */
+        @Size(max = 100) String quanHuyen,
         @NotBlank @Size(max = 120) String phuongXa,
         @Size(max = 50) String soNha,
         @Size(max = 200) String tenDuong,

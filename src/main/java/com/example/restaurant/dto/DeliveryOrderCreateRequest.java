@@ -22,7 +22,8 @@ public record DeliveryOrderCreateRequest(
         @Size(max = 50) String soNha,
         @Size(max = 200) String tenDuong,
         @NotBlank @Size(max = 120) String phuongXa,
-        @NotBlank @Size(max = 100) String quanHuyen,
+        /** Trường tương thích với client cũ; không còn bắt buộc trong mô hình địa chỉ 2 cấp. */
+        @Size(max = 100) String quanHuyen,
         @NotBlank @Size(max = 100) String tinhThanh,
         @Size(max = 500) String thongTinDiaChi,
         /** Trường tương thích với client cũ; client mới dùng soNha + tenDuong. */

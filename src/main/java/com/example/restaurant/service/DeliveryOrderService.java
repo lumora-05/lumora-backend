@@ -138,7 +138,6 @@ public class DeliveryOrderService {
         ensureRestaurantAcceptingOrders();
         return resolveDeliveryQuote(
                 request.tinhThanh(),
-                request.quanHuyen(),
                 request.phuongXa(),
                 streetAddress(request.soNha(), request.tenDuong(), request.diaChiChiTiet()),
                 request.googlePlaceId(),
@@ -187,7 +186,6 @@ public class DeliveryOrderService {
 
         DeliveryQuoteResponse quote = resolveDeliveryQuote(
                 request.tinhThanh(),
-                request.quanHuyen(),
                 request.phuongXa(),
                 streetAddress,
                 request.googlePlaceId(),
@@ -1154,18 +1152,16 @@ public class DeliveryOrderService {
     }
 
     private DeliveryQuoteResponse resolveDeliveryQuote(String city,
-            String district,
             String ward,
             String detailedAddress,
             String legacyPlaceId,
             String legacyFormattedAddress) {
         String cityText = trimToNull(city);
-        String districtText = trimToNull(district);
         String wardText = trimToNull(ward);
         String detailText = trimToNull(detailedAddress);
         String fullAddress = trimToNull(legacyFormattedAddress);
         if (fullAddress == null) {
-            fullAddress = joinAddress(detailText, wardText, districtText, cityText);
+            fullAddress = joinAddress(detailText, wardText, cityText);
         }
 
         String supportedCityText = StringUtils.hasText(deliveryProperties.getSupportedCity())
@@ -1234,7 +1230,7 @@ public class DeliveryOrderService {
 
             return new DeliveryQuoteResponse(
                     cityText,
-                    districtText,
+                    null,
                     wardText,
                     area,
                     areaLabel,
@@ -1249,55 +1245,16 @@ public class DeliveryOrderService {
             );
         }
 
-        // Fallback giữ nguyên nghiệp vụ cũ nếu chưa cấu hình OPENROUTESERVICE_API_KEY.
+        // Cấu trúc địa chỉ mới không còn dùng quận/huyện để suy ra vùng giao hàng.
+        // Vì phí được tính theo quãng đường thực tế, OpenRouteService phải được cấu hình.
         String normalizedCity = normalizeLocationKey(requiredText(city, "Tỉnh/thành phố không hợp lệ"));
         if (!normalizedCity.equals(supportedCity)) {
             throw unsupportedDeliveryCity(supportedCityText);
         }
 
-        if (!StringUtils.hasText(districtText)) {
-            districtText = inferDistrictFromAddress(fullAddress);
-        }
-        districtText = requiredText(
-                districtText,
-                "Không xác định được quận/huyện. Vui lòng nhập thêm quận/huyện vào địa chỉ giao hàng"
-        );
-        String area;
-        String areaLabel;
-        BigDecimal fee;
-        if (matchesConfiguredLocation(deliveryProperties.getInnerDistricts(), districtText)) {
-            area = AREA_INNER;
-            areaLabel = "Nội thành";
-            fee = configuredFee(deliveryProperties.getInnerAreaFee());
-        } else if (matchesConfiguredLocation(deliveryProperties.getNearbyDistricts(), districtText)) {
-            area = AREA_NEARBY;
-            areaLabel = "Khu vực lân cận";
-            fee = configuredFee(deliveryProperties.getNearbyAreaFee());
-        } else {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Khu vực " + districtText + " hiện chưa nằm trong phạm vi giao hàng của nhà hàng"
-            );
-        }
-
-        cityText = requiredText(city, "Tỉnh/thành phố không hợp lệ");
-        if (!StringUtils.hasText(fullAddress)) {
-            fullAddress = joinAddress(detailText, wardText, districtText, cityText);
-        }
-        return new DeliveryQuoteResponse(
-                cityText,
-                districtText,
-                wardText,
-                area,
-                areaLabel,
-                fee,
-                fullAddress,
-                false,
-                null,
-                null,
-                null,
-                estimatedCustomerEtaSeconds(null),
-                null
+        throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Dịch vụ tính khoảng cách giao hàng chưa được cấu hình. Vui lòng cấu hình openrouteservice ở backend"
         );
     }
 
