@@ -1159,10 +1159,16 @@ public class DeliveryOrderService {
         String cityText = trimToNull(city);
         String wardText = trimToNull(ward);
         String detailText = trimToNull(detailedAddress);
-        String fullAddress = trimToNull(legacyFormattedAddress);
-        if (fullAddress == null) {
-            fullAddress = joinAddress(detailText, wardText, cityText);
-        }
+
+        /*
+         * Ưu tiên tuyệt đối dữ liệu địa chỉ có cấu trúc do form hiện tại gửi lên.
+         * Không để googleFormattedAddress/legacyFormattedAddress cũ ghi đè rồi làm
+         * mất phường/xã đã chọn trên frontend.
+         */
+        String structuredAddress = joinAddress(detailText, wardText, cityText);
+        String fullAddress = StringUtils.hasText(structuredAddress)
+                ? structuredAddress
+                : trimToNull(legacyFormattedAddress);
 
         String supportedCityText = StringUtils.hasText(deliveryProperties.getSupportedCity())
                 ? deliveryProperties.getSupportedCity().trim()
@@ -1179,7 +1185,10 @@ public class DeliveryOrderService {
         // openrouteservice (dữ liệu OpenStreetMap). Trình duyệt không cần API key.
         if (openRouteService.isConfigured() && StringUtils.hasText(fullAddress)) {
             validateTypedDeliveryAddress(fullAddress);
-            OpenRouteService.RouteResult route = openRouteService.computeRouteToAddress(fullAddress);
+            OpenRouteService.RouteResult route = openRouteService.computeRouteToAddress(
+                    fullAddress,
+                    wardText,
+                    cityText);
 
             // Với ô địa chỉ nhập tự do, xác minh lại địa phương mà Pelias thực sự trả về.
             // Nhờ vậy địa chỉ ở Huế/Quảng Nam... không thể bị nhận nhầm thành đường cùng tên

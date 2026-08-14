@@ -49,6 +49,15 @@ public class OpenRouteService {
     }
 
     public RouteResult computeRouteToAddress(String address) {
+        return computeRouteToAddress(address, null, null);
+    }
+
+    /**
+     * Tính tuyến giao hàng và đồng thời xác minh các thành phần địa chỉ đã được
+     * frontend tách riêng. Ward/city được truyền độc lập để việc fallback geocode
+     * không thể vô tình làm mất phường/xã mà khách đã chọn.
+     */
+    public RouteResult computeRouteToAddress(String address, String requiredWard, String requiredCity) {
         if (!StringUtils.hasText(address)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -64,8 +73,28 @@ public class OpenRouteService {
         // Luôn lấy điểm xuất phát từ địa chỉ nhà hàng hiện tại trong Cài đặt hệ thống.
         Coordinate origin = originCoordinate();
 
-        // Ưu tiên kết quả địa chỉ khách gần nhà hàng để tránh nhầm địa danh trùng tên.
-        GeocodeResult destination = geocodeDeliveryAddress(address.trim(), origin);
+        // Chỉ nhận kết quả khớp số nhà + đường + phường/xã + tỉnh/thành phố.
+        GeocodeResult destination = geocodeDeliveryAddress(
+                address.trim(),
+                origin,
+                requiredWard,
+                requiredCity);
+
+        int directDistanceMeters = (int) Math.round(
+                haversineDistanceMeters(origin, destination.coordinate()));
+
+        /*
+         * Nếu hai địa chỉ có số nhà/tên đường khác nhau nhưng geocoder lại trả
+         * gần như cùng một tọa độ, không được tiếp tục rồi hiển thị 1 m. Đây là
+         * dấu hiệu dữ liệu bản đồ đã snap hai địa chỉ khác nhau vào cùng một điểm.
+         */
+        if (directDistanceMeters <= 2
+                && !sameRequestedStreetAddress(address, currentRestaurantAddress())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Bản đồ chưa phân biệt được chính xác địa chỉ giao hàng với vị trí nhà hàng. "
+                            + "Vui lòng kiểm tra lại số nhà, tên đường và phường/xã");
+        }
 
         Map<String, Object> body = Map.of(
                 "coordinates", List.of(
@@ -110,6 +139,11 @@ public class OpenRouteService {
             }
 
             int distanceMeters = (int) Math.round(rawDistanceMeters);
+
+            // Quãng đường thực không thể ngắn hơn khoảng cách đường chim bay giữa
+            // hai tọa độ geocode. Chặn các kết quả ORS bị snap sai xuống 1-2 m.
+            distanceMeters = Math.max(distanceMeters, directDistanceMeters);
+
             long durationSeconds = durationNode.isNumber()
                     ? Math.max(0L, Math.round(durationNode.asDouble()))
                     : 0L;
@@ -129,9 +163,6 @@ public class OpenRouteService {
              * để không làm sai nghiệp vụ tính phí giao hàng.
              */
             if (distanceMeters == 0 || !geometryValid) {
-                int directDistanceMeters = (int) Math.round(
-                        haversineDistanceMeters(origin, destination.coordinate()));
-
                 if (directDistanceMeters > 500) {
                     throw new ResponseStatusException(
                             HttpStatus.BAD_REQUEST,
@@ -216,8 +247,17 @@ public class OpenRouteService {
     /**
      * Geocode địa chỉ khách và bias kết quả về gần vị trí nhà hàng.
      */
-    private GeocodeResult geocodeDeliveryAddress(String address, Coordinate origin) {
-        return geocodeWithFallback(address, origin, GeocodeTarget.DELIVERY);
+    private GeocodeResult geocodeDeliveryAddress(
+            String address,
+            Coordinate origin,
+            String requiredWard,
+            String requiredCity) {
+        return geocodeWithFallback(
+                address,
+                origin,
+                GeocodeTarget.DELIVERY,
+                requiredWard,
+                requiredCity);
     }
 
     /**
@@ -234,12 +274,30 @@ public class OpenRouteService {
             String address,
             Coordinate focusPoint,
             GeocodeTarget target) {
+        return geocodeWithFallback(address, focusPoint, target, null, null);
+    }
+
+    private GeocodeResult geocodeWithFallback(
+            String address,
+            Coordinate focusPoint,
+            GeocodeTarget target,
+            String requiredWardInput,
+            String requiredCityInput) {
         if (!StringUtils.hasText(address)) {
             throw geocodeNotFound(target);
         }
 
         String requiredAdministrativeArea = target == GeocodeTarget.DELIVERY
-                ? extractAdministrativeArea(address)
+                ? normalizeAdministrativeText(
+                        StringUtils.hasText(requiredCityInput)
+                                ? requiredCityInput
+                                : extractAdministrativeArea(address))
+                : "";
+        String requiredWard = target == GeocodeTarget.DELIVERY
+                ? normalizeWardText(
+                        StringUtils.hasText(requiredWardInput)
+                                ? requiredWardInput
+                                : extractWardArea(address))
                 : "";
 
         Set<String> candidates = buildAddressCandidates(address, target);
@@ -258,10 +316,23 @@ public class OpenRouteService {
             GeocodeResult result = tryGeocode(
                     candidate,
                     effectiveFocusPoint,
-                    requiredAdministrativeArea);
+                    requiredAdministrativeArea,
+                    requiredWard,
+                    target);
             if (result != null) {
                 return result;
             }
+        }
+
+        if (target == GeocodeTarget.DELIVERY && StringUtils.hasText(requiredWard)) {
+            String wardLabel = StringUtils.hasText(requiredWardInput)
+                    ? cleanupSpaces(requiredWardInput)
+                    : extractWardDisplayName(address);
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Không xác minh được địa chỉ giao hàng thuộc phường/xã \""
+                            + wardLabel
+                            + "\". Vui lòng kiểm tra lại số nhà, tên đường và phường/xã");
         }
 
         throw geocodeNotFound(target);
@@ -421,6 +492,85 @@ public class OpenRouteService {
         return normalizeAdministrativeText(parts[parts.length - 1]);
     }
 
+    /**
+     * Địa chỉ có cấu trúc frontend gửi lên là:
+     * "số nhà + đường, phường/xã, tỉnh/thành phố".
+     * Lấy phần ngay trước tỉnh/thành làm ward fallback khi caller cũ không truyền
+     * ward độc lập.
+     */
+    private String extractWardArea(String address) {
+        return normalizeWardText(extractWardDisplayName(address));
+    }
+
+    private String extractWardDisplayName(String address) {
+        if (!StringUtils.hasText(address)) {
+            return "";
+        }
+
+        String[] parts = address.split(",");
+        if (parts.length < 3) {
+            return "";
+        }
+        return cleanupSpaces(parts[parts.length - 2]);
+    }
+
+    /**
+     * Xác minh phường/xã trên các trường hành chính mà Pelias có thể trả về.
+     * Không dùng phần đầu của label vì đó là số nhà/tên đường, tránh trường hợp
+     * tên đường vô tình trùng với tên phường. Nếu Pelias không cung cấp đủ ngữ
+     * cảnh để chứng minh đúng ward, kết quả bị loại (fail closed) thay vì tính phí
+     * từ một tọa độ không đáng tin cậy.
+     */
+    private boolean matchesWard(JsonNode feature, String requiredWard) {
+        if (!StringUtils.hasText(requiredWard)) {
+            return true;
+        }
+
+        JsonNode propertiesNode = feature.path("properties");
+        String[] administrativeFields = {
+                "ward", "neighbourhood", "borough", "locality", "localadmin",
+                "district", "county"
+        };
+        for (String field : administrativeFields) {
+            String candidate = normalizeWardText(propertiesNode.path(field).asText(""));
+            if (sameWard(requiredWard, candidate)) {
+                return true;
+            }
+        }
+
+        String label = propertiesNode.path("label").asText("");
+        if (StringUtils.hasText(label)) {
+            String[] labelParts = label.split(",");
+            // Bỏ phần đầu (số nhà + đường). Các phần còn lại mới là ngữ cảnh địa giới.
+            for (int i = 1; i < labelParts.length; i++) {
+                if (sameWard(requiredWard, normalizeWardText(labelParts[i]))) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean sameWard(String left, String right) {
+        return StringUtils.hasText(left)
+                && StringUtils.hasText(right)
+                && left.equals(right);
+    }
+
+    private String normalizeWardText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+
+        return removeVietnameseDiacritics(value)
+                .toLowerCase()
+                .replaceAll("(?iu)\\b(phuong|xa|thi tran|ward|commune|township)\\b", " ")
+                .replaceAll("[^a-z0-9]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
     private boolean matchesAdministrativeArea(
             JsonNode feature,
             String requiredAdministrativeArea) {
@@ -505,7 +655,9 @@ public class OpenRouteService {
     private GeocodeResult tryGeocode(
             String address,
             Coordinate focusPoint,
-            String requiredAdministrativeArea) {
+            String requiredAdministrativeArea,
+            String requiredWard,
+            GeocodeTarget target) {
         UriComponentsBuilder builder = UriComponentsBuilder
                 .fromUriString(properties.getGeocodeUrl().trim())
                 .queryParam("text", address)
@@ -557,6 +709,26 @@ public class OpenRouteService {
                     continue;
                 }
 
+                // Phường/xã là ràng buộc bắt buộc nếu frontend đã gửi riêng trường này.
+                if (target == GeocodeTarget.DELIVERY
+                        && !matchesWard(feature, requiredWard)) {
+                    continue;
+                }
+
+                /*
+                 * Với địa chỉ giao hàng có số nhà, không được chấp nhận một feature
+                 * chỉ đại diện cho cả con đường. Nếu Pelias không tìm được đúng số
+                 * nhà, việc dùng tâm/điểm đại diện của đường có thể làm 137 và 139
+                 * cùng Nguyễn Thị Thập bị snap về một tọa độ rồi trả khoảng cách 1 m.
+                 *
+                 * Chỉ áp dụng kiểm tra chặt này cho địa chỉ khách. Địa chỉ nhà hàng
+                 * giữ nguyên hành vi cũ để không làm thay đổi cấu hình hiện có.
+                 */
+                if (target == GeocodeTarget.DELIVERY
+                        && !matchesRequestedAddressPrecision(feature, address)) {
+                    continue;
+                }
+
                 GeocodeResult parsed = parseFeature(feature, address);
                 if (parsed != null) {
                     return parsed;
@@ -591,6 +763,129 @@ public class OpenRouteService {
                 true;
             default -> false;
         };
+    }
+
+
+    /**
+     * Nếu khách nhập số nhà thì feature Pelias phải thể hiện đúng số nhà đó và
+     * đúng tên đường. Không cho phép fallback về layer street vì đó chỉ là một
+     * điểm đại diện của cả con đường, không phải vị trí giao hàng cụ thể.
+     */
+    private boolean matchesRequestedAddressPrecision(JsonNode feature, String requestedAddress) {
+        String requestedHouseNumber = extractLeadingHouseNumber(requestedAddress);
+        if (!StringUtils.hasText(requestedHouseNumber)) {
+            return true;
+        }
+
+        JsonNode propertiesNode = feature.path("properties");
+        String layer = propertiesNode.path("layer").asText("").trim().toLowerCase();
+        if ("street".equals(layer)) {
+            return false;
+        }
+
+        String featureHouseNumber = cleanupSpaces(propertiesNode.path("housenumber").asText(""));
+        if (!StringUtils.hasText(featureHouseNumber)) {
+            String label = propertiesNode.path("label").asText("");
+            if (!StringUtils.hasText(label)) {
+                label = propertiesNode.path("name").asText("");
+            }
+            featureHouseNumber = extractLeadingHouseNumber(label);
+        }
+
+        if (!sameAddressToken(requestedHouseNumber, featureHouseNumber)) {
+            return false;
+        }
+
+        String requestedStreet = extractRequestedStreetName(requestedAddress);
+        if (!StringUtils.hasText(requestedStreet)) {
+            return true;
+        }
+
+        StringBuilder featureStreetText = new StringBuilder();
+        appendAdministrativeValue(featureStreetText, propertiesNode.path("street").asText(""));
+        appendAdministrativeValue(featureStreetText, propertiesNode.path("name").asText(""));
+        appendAdministrativeValue(featureStreetText, propertiesNode.path("label").asText(""));
+
+        String normalizedRequestedStreet = normalizeAddressText(requestedStreet);
+        String normalizedFeatureStreet = normalizeAddressText(featureStreetText.toString());
+        return StringUtils.hasText(normalizedRequestedStreet)
+                && normalizedFeatureStreet.contains(normalizedRequestedStreet);
+    }
+
+    private String extractLeadingHouseNumber(String address) {
+        if (!StringUtils.hasText(address)) {
+            return "";
+        }
+
+        String firstPart = cleanupSpaces(address.split(",", 2)[0]);
+        if (!StringUtils.hasText(firstPart)) {
+            return "";
+        }
+
+        String firstToken = firstPart.split("\\s+", 2)[0]
+                .replaceAll("^[^\\p{L}0-9]+|[^\\p{L}0-9/-]+$", "");
+        return firstToken.chars().anyMatch(Character::isDigit) ? firstToken : "";
+    }
+
+    private String extractRequestedStreetName(String address) {
+        if (!StringUtils.hasText(address)) {
+            return "";
+        }
+
+        String firstPart = cleanupSpaces(address.split(",", 2)[0]);
+        String houseNumber = extractLeadingHouseNumber(firstPart);
+        if (!StringUtils.hasText(houseNumber)) {
+            return firstPart;
+        }
+
+        int splitIndex = firstPart.indexOf(' ');
+        if (splitIndex < 0 || splitIndex >= firstPart.length() - 1) {
+            return "";
+        }
+
+        return cleanupSpaces(firstPart.substring(splitIndex + 1))
+                .replaceFirst("(?iu)^đường\\s+", "");
+    }
+
+    private boolean sameRequestedStreetAddress(String left, String right) {
+        String leftHouse = extractLeadingHouseNumber(left);
+        String rightHouse = extractLeadingHouseNumber(right);
+        String leftStreet = normalizeAddressText(extractRequestedStreetName(left));
+        String rightStreet = normalizeAddressText(extractRequestedStreetName(right));
+
+        return StringUtils.hasText(leftHouse)
+                && StringUtils.hasText(rightHouse)
+                && sameAddressToken(leftHouse, rightHouse)
+                && StringUtils.hasText(leftStreet)
+                && leftStreet.equals(rightStreet);
+    }
+
+    private boolean sameAddressToken(String left, String right) {
+        if (!StringUtils.hasText(left) || !StringUtils.hasText(right)) {
+            return false;
+        }
+        return normalizeAddressToken(left).equals(normalizeAddressToken(right));
+    }
+
+    private String normalizeAddressToken(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return removeVietnameseDiacritics(value)
+                .toLowerCase()
+                .replaceAll("[^a-z0-9]", "");
+    }
+
+    private String normalizeAddressText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return removeVietnameseDiacritics(value)
+                .toLowerCase()
+                .replaceAll("(?iu)\\bduong\\b", " ")
+                .replaceAll("[^a-z0-9]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private GeocodeResult parseFeature(JsonNode feature, String fallbackAddress) {
@@ -687,8 +982,8 @@ public class OpenRouteService {
 
         return new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
-                "Không tìm thấy địa chỉ giao hàng trên bản đồ. "
-                        + "Vui lòng nhập đầy đủ số nhà và tên đường");
+                "Không xác định được chính xác số nhà và tên đường giao hàng trên bản đồ. "
+                        + "Vui lòng kiểm tra lại địa chỉ");
     }
 
     private enum GeocodeTarget {
