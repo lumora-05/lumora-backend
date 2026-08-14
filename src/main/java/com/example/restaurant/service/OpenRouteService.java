@@ -73,7 +73,8 @@ public class OpenRouteService {
         // Luôn lấy điểm xuất phát từ địa chỉ nhà hàng hiện tại trong Cài đặt hệ thống.
         Coordinate origin = originCoordinate();
 
-        // Chỉ nhận kết quả khớp số nhà + đường + phường/xã + tỉnh/thành phố.
+        // Bắt buộc khớp số nhà + đường + tỉnh/thành phố; phường/xã được đối chiếu khi
+        // dữ liệu bản đồ đủ rõ.
         GeocodeResult destination = geocodeDeliveryAddress(
                 address.trim(),
                 origin,
@@ -324,17 +325,10 @@ public class OpenRouteService {
             }
         }
 
-        if (target == GeocodeTarget.DELIVERY && StringUtils.hasText(requiredWard)) {
-            String wardLabel = StringUtils.hasText(requiredWardInput)
-                    ? cleanupSpaces(requiredWardInput)
-                    : extractWardDisplayName(address);
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Không xác minh được địa chỉ giao hàng thuộc phường/xã \""
-                            + wardLabel
-                            + "\". Vui lòng kiểm tra lại số nhà, tên đường và phường/xã");
-        }
-
+        /*
+         * Không suy đoán rằng lỗi chắc chắn nằm ở phường/xã: một candidate cũng có thể
+         * bị loại vì sai số nhà, tên đường hoặc tỉnh/thành phố.
+         */
         throw geocodeNotFound(target);
     }
 
@@ -515,11 +509,17 @@ public class OpenRouteService {
     }
 
     /**
-     * Xác minh phường/xã trên các trường hành chính mà Pelias có thể trả về.
-     * Không dùng phần đầu của label vì đó là số nhà/tên đường, tránh trường hợp
-     * tên đường vô tình trùng với tên phường. Nếu Pelias không cung cấp đủ ngữ
-     * cảnh để chứng minh đúng ward, kết quả bị loại (fail closed) thay vì tính phí
-     * từ một tọa độ không đáng tin cậy.
+     * Xác minh phường/xã theo hướng an toàn nhưng không quá chặt.
+     *
+     * Pelias/OpenStreetMap tại Việt Nam có thể chưa đồng bộ ngay tên phường/xã mới
+     * sau khi sắp xếp địa giới. Vì vậy:
+     * - Nếu dữ liệu trả về có đúng phường/xã khách chọn -> chấp nhận.
+     * - Nếu có trường "ward" rõ ràng nhưng khác phường/xã khách chọn -> từ chối.
+     * - Các trường neighbourhood/borough/locality/localadmin/district/county chỉ
+     * dùng làm tín hiệu khớp tích cực; nếu khác thì không kết luận địa chỉ sai,
+     * vì chúng có thể là tên khu vực cũ hoặc cấp hành chính khác.
+     * - Nếu Pelias không cung cấp đủ dữ liệu cấp phường/xã -> để bước kiểm tra
+     * số nhà + tên đường + tỉnh/thành phố quyết định, thay vì loại địa chỉ đúng.
      */
     private boolean matchesWard(JsonNode feature, String requiredWard) {
         if (!StringUtils.hasText(requiredWard)) {
@@ -527,11 +527,23 @@ public class OpenRouteService {
         }
 
         JsonNode propertiesNode = feature.path("properties");
-        String[] administrativeFields = {
-                "ward", "neighbourhood", "borough", "locality", "localadmin",
+
+        // Trường ward là bằng chứng cấp phường/xã mạnh nhất nếu Pelias có trả về.
+        String explicitWard = normalizeWardText(propertiesNode.path("ward").asText(""));
+        if (StringUtils.hasText(explicitWard)) {
+            return sameWard(requiredWard, explicitWard);
+        }
+
+        /*
+         * Các trường dưới đây có thể chứa phường/xã, nhưng cũng có thể là khu dân cư,
+         * quận/huyện hoặc tên địa giới cũ. Chỉ dùng chúng để xác nhận khi khớp;
+         * không dùng một giá trị khác để bác bỏ địa chỉ.
+         */
+        String[] softAdministrativeFields = {
+                "neighbourhood", "borough", "locality", "localadmin",
                 "district", "county"
         };
-        for (String field : administrativeFields) {
+        for (String field : softAdministrativeFields) {
             String candidate = normalizeWardText(propertiesNode.path(field).asText(""));
             if (sameWard(requiredWard, candidate)) {
                 return true;
@@ -541,7 +553,8 @@ public class OpenRouteService {
         String label = propertiesNode.path("label").asText("");
         if (StringUtils.hasText(label)) {
             String[] labelParts = label.split(",");
-            // Bỏ phần đầu (số nhà + đường). Các phần còn lại mới là ngữ cảnh địa giới.
+            // Bỏ phần đầu (số nhà + đường). Các phần còn lại chỉ dùng để tìm match tích
+            // cực.
             for (int i = 1; i < labelParts.length; i++) {
                 if (sameWard(requiredWard, normalizeWardText(labelParts[i]))) {
                     return true;
@@ -549,7 +562,12 @@ public class OpenRouteService {
             }
         }
 
-        return false;
+        /*
+         * Không có bằng chứng đủ mạnh cho thấy phường/xã bị sai.
+         * Chấp nhận để các ràng buộc bắt buộc khác (số nhà, đường, tỉnh/thành)
+         * tiếp tục kiểm tra.
+         */
+        return true;
     }
 
     private boolean sameWard(String left, String right) {
@@ -709,7 +727,7 @@ public class OpenRouteService {
                     continue;
                 }
 
-                // Phường/xã là ràng buộc bắt buộc nếu frontend đã gửi riêng trường này.
+                // Chỉ loại khi Pelias có bằng chứng phường/xã rõ ràng và không khớp.
                 if (target == GeocodeTarget.DELIVERY
                         && !matchesWard(feature, requiredWard)) {
                     continue;
@@ -981,8 +999,8 @@ public class OpenRouteService {
 
         return new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
-                "Không xác định được chính xác số nhà và tên đường giao hàng trên bản đồ. "
-                        + "Vui lòng kiểm tra lại địa chỉ");
+                "Không xác định được chính xác địa chỉ giao hàng trên bản đồ. "
+                        + "Vui lòng kiểm tra lại số nhà, tên đường, phường/xã và tỉnh/thành phố");
     }
 
     private enum GeocodeTarget {
