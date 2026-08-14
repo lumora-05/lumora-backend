@@ -30,6 +30,8 @@ public record DeliveryOrderCreateRequest(
         @Size(max = 500) String diaChiChiTiet,
         @Size(max = 255) String googlePlaceId,
         @Size(max = 700) String googleFormattedAddress,
+        /** Token ngắn hạn do backend cấp khi khách chọn một gợi ý địa chỉ. */
+        @Size(max = 4000) String addressSelectionToken,
         @Size(max = 500) String ghiChuGiaoHang,
         @Size(max = 50) String maCodeKhuyenMai,
         @NotBlank @Size(max = 20) String phuongThucThanhToan,

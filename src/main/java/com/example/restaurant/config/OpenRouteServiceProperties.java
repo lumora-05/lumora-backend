@@ -18,6 +18,8 @@ public class OpenRouteServiceProperties {
     private String apiKey = "";
     private String directionsUrl = "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson";
     private String geocodeUrl = "https://api.heigit.org/pelias/v1/search";
+    /** Type-ahead để khách chọn địa chỉ từ danh sách gợi ý, tránh backend tự đoán chuỗi nhập dở. */
+    private String autocompleteUrl = "https://api.heigit.org/pelias/v1/autocomplete";
     private String countryCode = "VN";
     private String languageCode = "vi";
 

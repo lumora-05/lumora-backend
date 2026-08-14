@@ -3,6 +3,7 @@ package com.example.restaurant.service;
 import com.example.restaurant.config.DeliveryProperties;
 import com.example.restaurant.config.OpenRouteServiceProperties;
 import com.example.restaurant.config.RestaurantInfoProperties;
+import com.example.restaurant.dto.DeliveryAddressSuggestionResponse;
 import com.example.restaurant.dto.DeliveryHandoverRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateResponse;
@@ -134,6 +135,35 @@ public class DeliveryOrderService {
     }
 
     @Transactional(readOnly = true)
+    public List<DeliveryAddressSuggestionResponse> suggestAddresses(String query, String city, String ward) {
+        String queryText = requiredText(query, "Từ khóa địa chỉ không hợp lệ");
+        if (queryText.trim().length() < 3) {
+            return List.of();
+        }
+
+        String cityText = requiredText(city, "Tỉnh/thành phố không hợp lệ");
+        String supportedCityText = StringUtils.hasText(deliveryProperties.getSupportedCity())
+                ? deliveryProperties.getSupportedCity().trim()
+                : "Đà Nẵng";
+        if (!normalizeLocationKey(cityText).equals(normalizeLocationKey(supportedCityText))) {
+            throw unsupportedDeliveryCity(supportedCityText);
+        }
+
+        return openRouteService.suggestAddresses(queryText, trimToNull(ward), cityText).stream()
+                .map(item -> new DeliveryAddressSuggestionResponse(
+                        item.label(),
+                        item.name(),
+                        item.houseNumber(),
+                        item.street(),
+                        item.ward(),
+                        item.city(),
+                        item.latitude(),
+                        item.longitude(),
+                        item.selectionToken()))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public DeliveryQuoteResponse quote(DeliveryQuoteRequest request) {
         ensureRestaurantAcceptingOrders();
         return resolveDeliveryQuote(
@@ -141,7 +171,8 @@ public class DeliveryOrderService {
                 request.phuongXa(),
                 streetAddress(request.soNha(), request.tenDuong(), request.diaChiChiTiet()),
                 request.googlePlaceId(),
-                request.googleFormattedAddress());
+                request.googleFormattedAddress(),
+                request.addressSelectionToken());
     }
 
     @Transactional
@@ -189,7 +220,8 @@ public class DeliveryOrderService {
                 request.phuongXa(),
                 streetAddress,
                 request.googlePlaceId(),
-                request.googleFormattedAddress());
+                request.googleFormattedAddress(),
+                request.addressSelectionToken());
 
         Order order = new Order();
         order.setBanAn(null);
@@ -1155,7 +1187,8 @@ public class DeliveryOrderService {
             String ward,
             String detailedAddress,
             String legacyPlaceId,
-            String legacyFormattedAddress) {
+            String legacyFormattedAddress,
+            String addressSelectionToken) {
         String cityText = trimToNull(city);
         String wardText = trimToNull(ward);
         String detailText = trimToNull(detailedAddress);
@@ -1184,11 +1217,23 @@ public class DeliveryOrderService {
         // Bản đồ miễn phí: backend tự geocode địa chỉ và tính tuyến đường bằng
         // openrouteservice (dữ liệu OpenStreetMap). Trình duyệt không cần API key.
         if (openRouteService.isConfigured() && StringUtils.hasText(fullAddress)) {
-            validateTypedDeliveryAddress(fullAddress);
-            OpenRouteService.RouteResult route = openRouteService.computeRouteToAddress(
-                    fullAddress,
-                    wardText,
-                    cityText);
+            OpenRouteService.RouteResult route;
+            if (StringUtils.hasText(addressSelectionToken)) {
+                // Mô hình kiểu Shopee: khách đã chọn một gợi ý cụ thể. Backend xác minh
+                // token do chính mình cấp và dùng đúng tọa độ đã chọn, không geocode lại
+                // chuỗi nhập dở rồi tự đoán sang một con đường khác.
+                route = openRouteService.computeRouteToSelection(
+                        addressSelectionToken,
+                        wardText,
+                        cityText);
+            } else {
+                // Tương thích frontend cũ trong thời gian chuyển đổi.
+                validateTypedDeliveryAddress(fullAddress);
+                route = openRouteService.computeRouteToAddress(
+                        fullAddress,
+                        wardText,
+                        cityText);
+            }
 
             // Với ô địa chỉ nhập tự do, xác minh lại địa phương mà Pelias thực sự trả về.
             // Nhờ vậy địa chỉ ở Huế/Quảng Nam... không thể bị nhận nhầm thành đường cùng tên

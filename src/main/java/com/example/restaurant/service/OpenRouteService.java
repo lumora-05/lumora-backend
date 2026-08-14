@@ -3,6 +3,7 @@ package com.example.restaurant.service;
 import com.example.restaurant.config.OpenRouteServiceProperties;
 import com.example.restaurant.config.RestaurantInfoProperties;
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -12,8 +13,14 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +32,9 @@ public class OpenRouteService {
     private final OpenRouteServiceProperties properties;
     private final RestaurantInfoProperties restaurantInfoProperties;
     private final RestClient restClient;
+    private final String selectionSigningSecret;
+
+    private static final long ADDRESS_SELECTION_TTL_MILLIS = 20L * 60L * 1000L;
 
     /**
      * Cache tọa độ nhà hàng theo chính địa chỉ đang có trong Cài đặt hệ thống.
@@ -35,9 +45,11 @@ public class OpenRouteService {
 
     public OpenRouteService(
             OpenRouteServiceProperties properties,
-            RestaurantInfoProperties restaurantInfoProperties) {
+            RestaurantInfoProperties restaurantInfoProperties,
+            @Value("${app.jwt.secret}") String selectionSigningSecret) {
         this.properties = properties;
         this.restaurantInfoProperties = restaurantInfoProperties;
+        this.selectionSigningSecret = selectionSigningSecret;
         this.restClient = RestClient.create();
     }
 
@@ -46,6 +58,12 @@ public class OpenRouteService {
                 && StringUtils.hasText(properties.getApiKey())
                 && StringUtils.hasText(properties.getDirectionsUrl())
                 && StringUtils.hasText(properties.getGeocodeUrl());
+    }
+
+    public boolean isAutocompleteConfigured() {
+        return Boolean.TRUE.equals(properties.getEnabled())
+                && StringUtils.hasText(properties.getApiKey())
+                && StringUtils.hasText(properties.getAutocompleteUrl());
     }
 
     public RouteResult computeRouteToAddress(String address) {
@@ -70,31 +88,56 @@ public class OpenRouteService {
                     "openrouteservice chưa được cấu hình ở backend");
         }
 
-        // Luôn lấy điểm xuất phát từ địa chỉ nhà hàng hiện tại trong Cài đặt hệ thống.
         Coordinate origin = originCoordinate();
-
-        // Bắt buộc khớp số nhà + đường + tỉnh/thành phố; phường/xã được đối chiếu khi
-        // dữ liệu bản đồ đủ rõ.
         GeocodeResult destination = geocodeDeliveryAddress(
                 address.trim(),
                 origin,
                 requiredWard,
                 requiredCity);
 
+        return computeRoute(origin, destination, address.trim(), true);
+    }
+
+    /**
+     * Tính tuyến từ một gợi ý mà khách đã chọn. Token được ký ở backend nên frontend
+     * không thể sửa tọa độ để làm sai khoảng cách/phí giao hàng.
+     */
+    public RouteResult computeRouteToSelection(
+            String selectionToken,
+            String requiredWard,
+            String requiredCity) {
+        if (!isConfigured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "openrouteservice chưa được cấu hình ở backend");
+        }
+
+        AddressSelection selection = verifySelectionToken(selectionToken, requiredWard, requiredCity);
+        Coordinate origin = originCoordinate();
+        GeocodeResult destination = new GeocodeResult(
+                new Coordinate(selection.longitude(), selection.latitude()),
+                selection.label(),
+                selection.locationContext());
+
+        // Đây là tọa độ từ chính gợi ý khách đã chọn, không chạy lại fuzzy geocode.
+        return computeRoute(origin, destination, selection.label(), false);
+    }
+
+    private RouteResult computeRoute(
+            Coordinate origin,
+            GeocodeResult destination,
+            String requestedAddress,
+            boolean guardAmbiguousSamePoint) {
         int directDistanceMeters = (int) Math.round(
                 haversineDistanceMeters(origin, destination.coordinate()));
 
-        /*
-         * Nếu hai địa chỉ có số nhà/tên đường khác nhau nhưng geocoder lại trả
-         * gần như cùng một tọa độ, không được tiếp tục rồi hiển thị 1 m. Đây là
-         * dấu hiệu dữ liệu bản đồ đã snap hai địa chỉ khác nhau vào cùng một điểm.
-         */
-        if (directDistanceMeters <= 2
-                && !sameRequestedStreetAddress(address, currentRestaurantAddress())) {
+        if (guardAmbiguousSamePoint
+                && directDistanceMeters <= 2
+                && !sameRequestedStreetAddress(requestedAddress, currentRestaurantAddress())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Bản đồ chưa phân biệt được chính xác địa chỉ giao hàng với vị trí nhà hàng. "
-                            + "Vui lòng kiểm tra lại số nhà, tên đường và phường/xã");
+                            + "Vui lòng chọn một địa chỉ cụ thể trong danh sách gợi ý");
         }
 
         Map<String, Object> body = Map.of(
@@ -122,7 +165,6 @@ public class OpenRouteService {
 
             JsonNode feature = features.get(0);
             JsonNode summary = feature.path("properties").path("summary");
-
             JsonNode distanceNode = summary.path("distance");
             JsonNode durationNode = summary.path("duration");
 
@@ -140,9 +182,6 @@ public class OpenRouteService {
             }
 
             int distanceMeters = (int) Math.round(rawDistanceMeters);
-
-            // Quãng đường thực không thể ngắn hơn khoảng cách đường chim bay giữa
-            // hai tọa độ geocode. Chặn các kết quả ORS bị snap sai xuống 1-2 m.
             distanceMeters = Math.max(distanceMeters, directDistanceMeters);
 
             long durationSeconds = durationNode.isNumber()
@@ -154,15 +193,6 @@ public class OpenRouteService {
                     && coordinates.isArray()
                     && !coordinates.isEmpty();
 
-            /*
-             * openrouteservice đôi khi trả distance = 0 hoặc geometry rỗng khi
-             * điểm đầu và điểm cuối rất gần nhau / cùng được snap vào một đoạn đường.
-             * Đây không phải lỗi đối với đơn giao ngay cạnh nhà hàng.
-             *
-             * Chỉ dùng khoảng cách đường chim bay làm fallback cho trường hợp rất gần
-             * (<= 500 m). Các tuyến xa hơn vẫn bắt buộc phải có route hợp lệ từ ORS
-             * để không làm sai nghiệp vụ tính phí giao hàng.
-             */
             if (distanceMeters == 0 || !geometryValid) {
                 if (directDistanceMeters > 500) {
                     throw new ResponseStatusException(
@@ -170,7 +200,6 @@ public class OpenRouteService {
                             "Dịch vụ bản đồ không trả về tuyến đường hợp lệ");
                 }
 
-                // Tránh trả về 0 m cho hai địa chỉ rất gần hoặc bị snap cùng một điểm.
                 distanceMeters = Math.max(1, directDistanceMeters);
 
                 if (!geometryValid) {
@@ -243,6 +272,289 @@ public class OpenRouteService {
                     "Địa chỉ nhà hàng chưa được cấu hình trong Cài đặt hệ thống");
         }
         return address;
+    }
+
+    /**
+     * Autocomplete địa chỉ cho checkout kiểu Shopee: người dùng gõ, backend trả
+     * danh sách gợi ý cụ thể và frontend bắt buộc để người dùng chọn một mục.
+     */
+    public List<AddressSuggestion> suggestAddresses(
+            String query,
+            String requiredWard,
+            String requiredCity) {
+        if (!StringUtils.hasText(query) || cleanupSpaces(query).length() < 3) {
+            return List.of();
+        }
+        if (!isAutocompleteConfigured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Dịch vụ gợi ý địa chỉ chưa được cấu hình ở backend");
+        }
+
+        String city = cleanupSpaces(requiredCity);
+        String ward = cleanupSpaces(requiredWard);
+        String requiredAdministrativeArea = normalizeAdministrativeText(city);
+        String normalizedWard = normalizeWardText(ward);
+
+        StringBuilder text = new StringBuilder(cleanupSpaces(query));
+        if (StringUtils.hasText(ward)) {
+            text.append(", ").append(ward);
+        }
+        if (StringUtils.hasText(city)) {
+            text.append(", ").append(city);
+        }
+
+        UriComponentsBuilder builder = UriComponentsBuilder
+                .fromUriString(properties.getAutocompleteUrl().trim())
+                .queryParam("text", text.toString())
+                .queryParam("size", 8)
+                .queryParam(
+                        "boundary.country",
+                        StringUtils.hasText(properties.getCountryCode())
+                                ? properties.getCountryCode().trim()
+                                : "VN")
+                .queryParam(
+                        "lang",
+                        StringUtils.hasText(properties.getLanguageCode())
+                                ? properties.getLanguageCode().trim()
+                                : "vi");
+
+        URI uri = builder.build().encode().toUri();
+        String requestedHouseNumber = extractLeadingHouseNumber(query);
+
+        try {
+            JsonNode response = restClient.get()
+                    .uri(uri)
+                    .header("Authorization", properties.getApiKey().trim())
+                    .retrieve()
+                    .body(JsonNode.class);
+
+            JsonNode features = response == null ? null : response.path("features");
+            if (features == null || !features.isArray() || features.isEmpty()) {
+                return List.of();
+            }
+
+            List<AddressSuggestion> suggestions = new ArrayList<>();
+            Set<String> dedupe = new LinkedHashSet<>();
+
+            for (JsonNode feature : features) {
+                if (isTooCoarse(feature)
+                        || !matchesAdministrativeArea(feature, requiredAdministrativeArea)
+                        || !matchesWard(feature, normalizedWard)) {
+                    continue;
+                }
+
+                JsonNode propertiesNode = feature.path("properties");
+                String layer = propertiesNode.path("layer").asText("").trim().toLowerCase();
+                String houseNumber = cleanupSpaces(propertiesNode.path("housenumber").asText(""));
+
+                // Khi khách đã nhập số nhà, không gợi ý một kết quả chỉ là cả con đường
+                // và không tự đổi 137 thành một số nhà khác.
+                if (StringUtils.hasText(requestedHouseNumber)) {
+                    if ("street".equals(layer) || !StringUtils.hasText(houseNumber)
+                            || !sameAddressToken(requestedHouseNumber, houseNumber)) {
+                        continue;
+                    }
+                }
+
+                GeocodeResult parsed = parseFeature(feature, query);
+                if (parsed == null) {
+                    continue;
+                }
+
+                JsonNode coordinates = feature.path("geometry").path("coordinates");
+                double longitude = coordinates.get(0).asDouble(Double.NaN);
+                double latitude = coordinates.get(1).asDouble(Double.NaN);
+                if (!Double.isFinite(longitude) || !Double.isFinite(latitude)) {
+                    continue;
+                }
+
+                String label = parsed.formattedAddress();
+                String dedupeKey = normalizeAddressText(label) + "|" + longitude + "|" + latitude;
+                if (!dedupe.add(dedupeKey)) {
+                    continue;
+                }
+
+                String featureWard = firstNonBlank(
+                        propertiesNode.path("ward").asText(""),
+                        propertiesNode.path("neighbourhood").asText(""),
+                        propertiesNode.path("locality").asText(""),
+                        propertiesNode.path("localadmin").asText(""));
+                String featureCity = firstNonBlank(
+                        propertiesNode.path("region").asText(""),
+                        propertiesNode.path("locality").asText(""),
+                        propertiesNode.path("localadmin").asText(""),
+                        city);
+                String name = firstNonBlank(
+                        propertiesNode.path("name").asText(""),
+                        label);
+                String street = firstNonBlank(
+                        propertiesNode.path("street").asText(""),
+                        extractRequestedStreetName(label));
+
+                String selectionToken = createSelectionToken(
+                        longitude,
+                        latitude,
+                        label,
+                        parsed.locationContext(),
+                        normalizedWard,
+                        requiredAdministrativeArea);
+
+                suggestions.add(new AddressSuggestion(
+                        label,
+                        name,
+                        houseNumber,
+                        street,
+                        featureWard,
+                        featureCity,
+                        latitude,
+                        longitude,
+                        selectionToken));
+
+                if (suggestions.size() >= 6) {
+                    break;
+                }
+            }
+
+            return List.copyOf(suggestions);
+        } catch (RestClientException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Không thể tải gợi ý địa chỉ từ openrouteservice",
+                    ex);
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            String cleaned = cleanupSpaces(value);
+            if (StringUtils.hasText(cleaned)) {
+                return cleaned;
+            }
+        }
+        return "";
+    }
+
+    private String createSelectionToken(
+            double longitude,
+            double latitude,
+            String label,
+            String locationContext,
+            String normalizedWard,
+            String normalizedCity) {
+        long expiresAt = System.currentTimeMillis() + ADDRESS_SELECTION_TTL_MILLIS;
+        String payload = String.join("|",
+                "v1",
+                Long.toString(expiresAt),
+                Double.toString(longitude),
+                Double.toString(latitude),
+                base64Url(label),
+                base64Url(locationContext),
+                base64Url(normalizedWard),
+                base64Url(normalizedCity));
+        String encodedPayload = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(payload.getBytes(StandardCharsets.UTF_8));
+        return encodedPayload + "." + sign(encodedPayload);
+    }
+
+    private AddressSelection verifySelectionToken(
+            String token,
+            String requiredWard,
+            String requiredCity) {
+        if (!StringUtils.hasText(token)) {
+            throw invalidSelectionToken();
+        }
+
+        String[] tokenParts = token.trim().split("\\.", 2);
+        if (tokenParts.length != 2) {
+            throw invalidSelectionToken();
+        }
+
+        byte[] expected = sign(tokenParts[0]).getBytes(StandardCharsets.UTF_8);
+        byte[] actual = tokenParts[1].getBytes(StandardCharsets.UTF_8);
+        if (!MessageDigest.isEqual(expected, actual)) {
+            throw invalidSelectionToken();
+        }
+
+        try {
+            String payload = new String(
+                    Base64.getUrlDecoder().decode(tokenParts[0]),
+                    StandardCharsets.UTF_8);
+            String[] parts = payload.split("\\|", -1);
+            if (parts.length != 8 || !"v1".equals(parts[0])) {
+                throw invalidSelectionToken();
+            }
+
+            long expiresAt = Long.parseLong(parts[1]);
+            if (expiresAt < System.currentTimeMillis()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Địa chỉ đã chọn đã hết hạn. Vui lòng chọn lại từ danh sách gợi ý");
+            }
+
+            double longitude = Double.parseDouble(parts[2]);
+            double latitude = Double.parseDouble(parts[3]);
+            if (!Double.isFinite(longitude) || !Double.isFinite(latitude)
+                    || longitude < -180d || longitude > 180d
+                    || latitude < -90d || latitude > 90d) {
+                throw invalidSelectionToken();
+            }
+
+            String label = fromBase64Url(parts[4]);
+            String locationContext = fromBase64Url(parts[5]);
+            String tokenWard = fromBase64Url(parts[6]);
+            String tokenCity = fromBase64Url(parts[7]);
+
+            String currentWard = normalizeWardText(requiredWard);
+            String currentCity = normalizeAdministrativeText(requiredCity);
+            if (!tokenCity.equals(currentCity) || !tokenWard.equals(currentWard)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Tỉnh/thành phố hoặc phường/xã đã thay đổi. Vui lòng chọn lại địa chỉ gợi ý");
+            }
+
+            return new AddressSelection(
+                    longitude,
+                    latitude,
+                    label,
+                    locationContext);
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw invalidSelectionToken();
+        }
+    }
+
+    private String sign(String encodedPayload) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(
+                    selectionSigningSecret.getBytes(StandardCharsets.UTF_8),
+                    "HmacSHA256"));
+            return Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(mac.doFinal(encodedPayload.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception ex) {
+            throw new IllegalStateException("Không thể ký token địa chỉ", ex);
+        }
+    }
+
+    private String base64Url(String value) {
+        String safe = value == null ? "" : value;
+        return Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(safe.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String fromBase64Url(String value) {
+        return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
+    }
+
+    private ResponseStatusException invalidSelectionToken() {
+        return new ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Địa chỉ đã chọn không hợp lệ. Vui lòng chọn lại từ danh sách gợi ý");
     }
 
     /**
@@ -1001,6 +1313,25 @@ public class OpenRouteService {
                 HttpStatus.BAD_REQUEST,
                 "Không xác định được chính xác địa chỉ giao hàng trên bản đồ. "
                         + "Vui lòng kiểm tra lại số nhà, tên đường, phường/xã và tỉnh/thành phố");
+    }
+
+    private record AddressSelection(
+            double longitude,
+            double latitude,
+            String label,
+            String locationContext) {
+    }
+
+    public record AddressSuggestion(
+            String label,
+            String name,
+            String houseNumber,
+            String street,
+            String ward,
+            String city,
+            Double latitude,
+            Double longitude,
+            String selectionToken) {
     }
 
     private enum GeocodeTarget {

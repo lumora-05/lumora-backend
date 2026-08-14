@@ -1,6 +1,7 @@
 package com.example.restaurant.controller;
 
 import com.example.restaurant.dto.ApiResponse;
+import com.example.restaurant.dto.DeliveryAddressSuggestionResponse;
 import com.example.restaurant.dto.DeliveryOrderCreateRequest;
 import com.example.restaurant.dto.DeliveryOrderCreateResponse;
 import com.example.restaurant.dto.DeliveryQuoteRequest;
@@ -19,6 +20,19 @@ public class CustomerDeliveryController {
     private final DeliveryOrderService deliveryOrderService;
     public CustomerDeliveryController(DeliveryOrderService deliveryOrderService) {
         this.deliveryOrderService = deliveryOrderService;
+    }
+
+
+    /** Gợi ý địa chỉ khi khách đang gõ; frontend phải để khách chọn một kết quả cụ thể. */
+    @GetMapping("/address-suggestions")
+    public ResponseEntity<ApiResponse<java.util.List<DeliveryAddressSuggestionResponse>>> addressSuggestions(
+            @RequestParam String query,
+            @RequestParam String tinhThanh,
+            @RequestParam(required = false) String phuongXa) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Gợi ý địa chỉ thành công",
+                deliveryOrderService.suggestAddresses(query, tinhThanh, phuongXa)
+        ));
     }
 
     /** Backend tự xác định khu vực và phí giao; frontend không được tự quyết định phí. */
