@@ -150,7 +150,8 @@ public class OpenRouteService {
                             distanceMeters,
                             durationSeconds,
                             fallbackGeometry,
-                            destination.formattedAddress());
+                            destination.formattedAddress(),
+                            destination.locationContext());
                 }
             }
 
@@ -158,7 +159,8 @@ public class OpenRouteService {
                     distanceMeters,
                     durationSeconds,
                     coordinates.toString(),
-                    destination.formattedAddress());
+                    destination.formattedAddress(),
+                    destination.locationContext());
         } catch (RestClientException ex) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
@@ -613,9 +615,33 @@ public class OpenRouteService {
             label = fallbackAddress;
         }
 
+        String locationContext = buildLocationContext(propertiesNode, label);
+
         return new GeocodeResult(
                 new Coordinate(longitude, latitude),
-                label.trim());
+                label.trim(),
+                locationContext);
+    }
+
+    private String buildLocationContext(JsonNode propertiesNode, String label) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        addLocationContext(values, label);
+        addLocationContext(values, propertiesNode.path("name").asText(""));
+        addLocationContext(values, propertiesNode.path("neighbourhood").asText(""));
+        addLocationContext(values, propertiesNode.path("borough").asText(""));
+        addLocationContext(values, propertiesNode.path("locality").asText(""));
+        addLocationContext(values, propertiesNode.path("localadmin").asText(""));
+        addLocationContext(values, propertiesNode.path("county").asText(""));
+        addLocationContext(values, propertiesNode.path("region").asText(""));
+        addLocationContext(values, propertiesNode.path("macroregion").asText(""));
+        return String.join(", ", values);
+    }
+
+    private void addLocationContext(Set<String> values, String value) {
+        String cleaned = cleanupSpaces(value);
+        if (StringUtils.hasText(cleaned)) {
+            values.add(cleaned);
+        }
     }
 
     /**
@@ -675,13 +701,15 @@ public class OpenRouteService {
 
     private record GeocodeResult(
             Coordinate coordinate,
-            String formattedAddress) {
+            String formattedAddress,
+            String locationContext) {
     }
 
     public record RouteResult(
             int distanceMeters,
             long durationSeconds,
             String routeGeometry,
-            String resolvedAddress) {
+            String resolvedAddress,
+            String resolvedLocationContext) {
     }
 }
