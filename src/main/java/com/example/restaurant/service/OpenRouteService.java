@@ -258,7 +258,8 @@ public class OpenRouteService {
             GeocodeResult result = tryGeocode(
                     candidate,
                     effectiveFocusPoint,
-                    requiredAdministrativeArea);
+                    requiredAdministrativeArea,
+                    target);
             if (result != null) {
                 return result;
             }
@@ -505,7 +506,8 @@ public class OpenRouteService {
     private GeocodeResult tryGeocode(
             String address,
             Coordinate focusPoint,
-            String requiredAdministrativeArea) {
+            String requiredAdministrativeArea,
+            GeocodeTarget target) {
         UriComponentsBuilder builder = UriComponentsBuilder
                 .fromUriString(properties.getGeocodeUrl().trim())
                 .queryParam("text", address)
@@ -557,6 +559,20 @@ public class OpenRouteService {
                     continue;
                 }
 
+                /*
+                 * Với địa chỉ giao hàng có số nhà, không được chấp nhận một feature
+                 * chỉ đại diện cho cả con đường. Nếu Pelias không tìm được đúng số
+                 * nhà, việc dùng tâm/điểm đại diện của đường có thể làm 137 và 139
+                 * cùng Nguyễn Thị Thập bị snap về một tọa độ rồi trả khoảng cách 1 m.
+                 *
+                 * Chỉ áp dụng kiểm tra chặt này cho địa chỉ khách. Địa chỉ nhà hàng
+                 * giữ nguyên hành vi cũ để không làm thay đổi cấu hình hiện có.
+                 */
+                if (target == GeocodeTarget.DELIVERY
+                        && !matchesRequestedAddressPrecision(feature, address)) {
+                    continue;
+                }
+
                 GeocodeResult parsed = parseFeature(feature, address);
                 if (parsed != null) {
                     return parsed;
@@ -591,6 +607,116 @@ public class OpenRouteService {
                 true;
             default -> false;
         };
+    }
+
+
+    /**
+     * Nếu khách nhập số nhà thì feature Pelias phải thể hiện đúng số nhà đó và
+     * đúng tên đường. Không cho phép fallback về layer street vì đó chỉ là một
+     * điểm đại diện của cả con đường, không phải vị trí giao hàng cụ thể.
+     */
+    private boolean matchesRequestedAddressPrecision(JsonNode feature, String requestedAddress) {
+        String requestedHouseNumber = extractLeadingHouseNumber(requestedAddress);
+        if (!StringUtils.hasText(requestedHouseNumber)) {
+            return true;
+        }
+
+        JsonNode propertiesNode = feature.path("properties");
+        String layer = propertiesNode.path("layer").asText("").trim().toLowerCase();
+        if ("street".equals(layer)) {
+            return false;
+        }
+
+        String featureHouseNumber = cleanupSpaces(propertiesNode.path("housenumber").asText(""));
+        if (!StringUtils.hasText(featureHouseNumber)) {
+            String label = propertiesNode.path("label").asText("");
+            if (!StringUtils.hasText(label)) {
+                label = propertiesNode.path("name").asText("");
+            }
+            featureHouseNumber = extractLeadingHouseNumber(label);
+        }
+
+        if (!sameAddressToken(requestedHouseNumber, featureHouseNumber)) {
+            return false;
+        }
+
+        String requestedStreet = extractRequestedStreetName(requestedAddress);
+        if (!StringUtils.hasText(requestedStreet)) {
+            return true;
+        }
+
+        StringBuilder featureStreetText = new StringBuilder();
+        appendAdministrativeValue(featureStreetText, propertiesNode.path("street").asText(""));
+        appendAdministrativeValue(featureStreetText, propertiesNode.path("name").asText(""));
+        appendAdministrativeValue(featureStreetText, propertiesNode.path("label").asText(""));
+
+        String normalizedRequestedStreet = normalizeAddressText(requestedStreet);
+        String normalizedFeatureStreet = normalizeAddressText(featureStreetText.toString());
+        return StringUtils.hasText(normalizedRequestedStreet)
+                && normalizedFeatureStreet.contains(normalizedRequestedStreet);
+    }
+
+    private String extractLeadingHouseNumber(String address) {
+        if (!StringUtils.hasText(address)) {
+            return "";
+        }
+
+        String firstPart = cleanupSpaces(address.split(",", 2)[0]);
+        if (!StringUtils.hasText(firstPart)) {
+            return "";
+        }
+
+        String firstToken = firstPart.split("\\s+", 2)[0]
+                .replaceAll("^[^\\p{L}0-9]+|[^\\p{L}0-9/-]+$", "");
+        return firstToken.chars().anyMatch(Character::isDigit) ? firstToken : "";
+    }
+
+    private String extractRequestedStreetName(String address) {
+        if (!StringUtils.hasText(address)) {
+            return "";
+        }
+
+        String firstPart = cleanupSpaces(address.split(",", 2)[0]);
+        String houseNumber = extractLeadingHouseNumber(firstPart);
+        if (!StringUtils.hasText(houseNumber)) {
+            return firstPart;
+        }
+
+        int splitIndex = firstPart.indexOf(' ');
+        if (splitIndex < 0 || splitIndex >= firstPart.length() - 1) {
+            return "";
+        }
+
+        return cleanupSpaces(firstPart.substring(splitIndex + 1))
+                .replaceFirst("(?iu)^đường\\s+", "");
+    }
+
+    private boolean sameAddressToken(String left, String right) {
+        if (!StringUtils.hasText(left) || !StringUtils.hasText(right)) {
+            return false;
+        }
+        return normalizeAddressToken(left).equals(normalizeAddressToken(right));
+    }
+
+    private String normalizeAddressToken(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return removeVietnameseDiacritics(value)
+                .toLowerCase()
+                .replaceAll("[^a-z0-9]", "");
+    }
+
+    private String normalizeAddressText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return removeVietnameseDiacritics(value)
+                .toLowerCase()
+                .replaceAll("(?iu)\\bduong\\b", " ")
+                .replaceAll("[^a-z0-9]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private GeocodeResult parseFeature(JsonNode feature, String fallbackAddress) {
@@ -687,8 +813,8 @@ public class OpenRouteService {
 
         return new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
-                "Không tìm thấy địa chỉ giao hàng trên bản đồ. "
-                        + "Vui lòng nhập đầy đủ số nhà và tên đường");
+                "Không xác định được chính xác số nhà và tên đường giao hàng trên bản đồ. "
+                        + "Vui lòng kiểm tra lại địa chỉ");
     }
 
     private enum GeocodeTarget {
