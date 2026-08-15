@@ -18,6 +18,15 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
 
     List<Order> findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(String loaiDon);
 
+    List<Order> findByKhachHang_MaKhachHangAndLoaiDonOrderByThoiGianDatDescMaDonHangDesc(
+            Integer maKhachHang,
+            String loaiDon
+    );
+
+    List<Order> findByKhachHang_MaKhachHangOrderByThoiGianDatDescMaDonHangDesc(Integer maKhachHang);
+
+    long countByKhachHang_MaKhachHang(Integer maKhachHang);
+
     List<Order> findByLoaiDonAndTrangThaiOrderByThoiGianDatDescMaDonHangDesc(
             String loaiDon,
             String trangThai

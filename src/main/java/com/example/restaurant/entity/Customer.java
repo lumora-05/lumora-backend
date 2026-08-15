@@ -33,6 +33,11 @@ public class Customer {
     @Column(name = "so_dien_thoai", length = 15, nullable = false)
     private String soDienThoai;
 
+    /** Null với khách vãng lai/khách thân thiết chưa tạo tài khoản. */
+    @JsonIgnore
+    @Column(name = "mat_khau_hash", length = 100)
+    private String matKhauHash;
+
     @Column(name = "diem_tich_luy", nullable = false)
     private Integer diemTichLuy = 0;
 

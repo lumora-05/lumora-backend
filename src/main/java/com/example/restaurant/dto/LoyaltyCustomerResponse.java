@@ -11,6 +11,9 @@ public record LoyaltyCustomerResponse(
         BigDecimal tongChiTieu,
         String trangThai,
         LocalDateTime thoiGianTao,
-        LocalDateTime thoiGianCapNhat
+        LocalDateTime thoiGianCapNhat,
+        boolean coTaiKhoan,
+        String loaiKhachHang,
+        long soDonHang
 ) {
 }

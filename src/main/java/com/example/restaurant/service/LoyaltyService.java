@@ -7,6 +7,7 @@ import com.example.restaurant.entity.LoyaltyTransaction;
 import com.example.restaurant.entity.Order;
 import com.example.restaurant.repository.CustomerRepository;
 import com.example.restaurant.repository.LoyaltyTransactionRepository;
+import com.example.restaurant.repository.OrderRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -30,13 +31,16 @@ public class LoyaltyService {
     private final CustomerRepository customerRepository;
     private final LoyaltyTransactionRepository loyaltyTransactionRepository;
     private final LoyaltyPolicyProperties loyaltyPolicyProperties;
+    private final OrderRepository orderRepository;
 
     public LoyaltyService(CustomerRepository customerRepository,
                           LoyaltyTransactionRepository loyaltyTransactionRepository,
-                          LoyaltyPolicyProperties loyaltyPolicyProperties) {
+                          LoyaltyPolicyProperties loyaltyPolicyProperties,
+                          OrderRepository orderRepository) {
         this.customerRepository = customerRepository;
         this.loyaltyTransactionRepository = loyaltyTransactionRepository;
         this.loyaltyPolicyProperties = loyaltyPolicyProperties;
+        this.orderRepository = orderRepository;
     }
 
     @Transactional(readOnly = true)
@@ -116,6 +120,32 @@ public class LoyaltyService {
 
         customer.setHoTen(normalizeName(request.hoTen(), customer.getHoTen()));
         customer.setSoDienThoai(phone);
+        return toCustomerResponse(customerRepository.saveAndFlush(customer));
+    }
+
+
+    @Transactional(readOnly = true)
+    public java.util.List<AdminCustomerOrderResponse> orderHistory(Integer customerId) {
+        requireCustomer(customerId);
+        return orderRepository
+                .findByKhachHang_MaKhachHangOrderByThoiGianDatDescMaDonHangDesc(customerId)
+                .stream()
+                .map(this::toAdminCustomerOrderResponse)
+                .toList();
+    }
+
+    @Transactional
+    public LoyaltyCustomerResponse updateAccountStatus(Integer customerId, AdminCustomerStatusRequest request) {
+        Customer customer = customerRepository.findByIdForUpdate(customerId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Không tìm thấy khách hàng: " + customerId
+                ));
+        String status = request.trangThai().trim().toUpperCase(Locale.ROOT);
+        if (!"HOAT_DONG".equals(status) && !"KHOA".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái khách hàng không hợp lệ");
+        }
+        customer.setTrangThai(status);
         return toCustomerResponse(customerRepository.saveAndFlush(customer));
     }
 
@@ -398,6 +428,7 @@ public class LoyaltyService {
     }
 
     private LoyaltyCustomerResponse toCustomerResponse(Customer customer) {
+        boolean hasAccount = customer.getMatKhauHash() != null && !customer.getMatKhauHash().isBlank();
         return new LoyaltyCustomerResponse(
                 customer.getMaKhachHang(),
                 customer.getHoTen(),
@@ -406,7 +437,22 @@ public class LoyaltyService {
                 money(customer.getTongChiTieu()),
                 customer.getTrangThai(),
                 customer.getThoiGianTao(),
-                customer.getThoiGianCapNhat()
+                customer.getThoiGianCapNhat(),
+                hasAccount,
+                hasAccount ? "THANH_VIEN" : "KHACH_VANG_LAI",
+                orderRepository.countByKhachHang_MaKhachHang(customer.getMaKhachHang())
+        );
+    }
+
+    private AdminCustomerOrderResponse toAdminCustomerOrderResponse(Order order) {
+        return new AdminCustomerOrderResponse(
+                order.getMaDonHang(),
+                order.getLoaiDon(),
+                order.getNguonDon(),
+                order.getTrangThai(),
+                money(order.getTongTien()),
+                order.getThoiGianDat(),
+                order.getThoiGianCapNhat()
         );
     }
 

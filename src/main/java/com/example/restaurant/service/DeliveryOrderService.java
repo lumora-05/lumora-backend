@@ -18,6 +18,7 @@ import com.example.restaurant.dto.DeliveryRefundConfirmRequest;
 import com.example.restaurant.dto.DeliveryTrackingItemResponse;
 import com.example.restaurant.dto.DeliveryTrackingResponse;
 import com.example.restaurant.dto.VietQrResponse;
+import com.example.restaurant.entity.Customer;
 import com.example.restaurant.entity.DeliveryRefund;
 import com.example.restaurant.entity.Food;
 import com.example.restaurant.entity.Order;
@@ -185,6 +186,11 @@ public class DeliveryOrderService {
 
     @Transactional
     public DeliveryOrderCreateResponse createOrder(DeliveryOrderCreateRequest request) {
+        return createOrder(request, null);
+    }
+
+    @Transactional
+    public DeliveryOrderCreateResponse createOrder(DeliveryOrderCreateRequest request, Customer customer) {
         ensureRestaurantAcceptingOrders();
         String clientRequestId = requiredText(request.clientRequestId(), "Mã chống tạo trùng không hợp lệ");
         String recipientPhone = normalizePhone(request.soDienThoaiNhan());
@@ -242,6 +248,7 @@ public class DeliveryOrderService {
         order.setBanAn(null);
         order.setLoaiDon(ORDER_TYPE_DELIVERY);
         order.setNguonDon(ORDER_SOURCE_WEBSITE);
+        order.setKhachHang(customer);
         order.setTrangThai(PAYMENT_VIETQR.equals(paymentMethod)
                 ? DELIVERY_WAITING_PAYMENT
                 : DELIVERY_PENDING_CONFIRMATION);
@@ -355,6 +362,17 @@ public class DeliveryOrderService {
     @Transactional(readOnly = true)
     public List<Order> findAll() {
         return orderRepository.findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(ORDER_TYPE_DELIVERY);
+    }
+
+    @Transactional(readOnly = true)
+    public List<DeliveryTrackingResponse> findByCustomer(Integer customerId) {
+        return orderRepository
+                .findByKhachHang_MaKhachHangAndLoaiDonOrderByThoiGianDatDescMaDonHangDesc(
+                        customerId,
+                        ORDER_TYPE_DELIVERY)
+                .stream()
+                .map(this::toTrackingResponse)
+                .toList();
     }
 
     @Transactional(readOnly = true)

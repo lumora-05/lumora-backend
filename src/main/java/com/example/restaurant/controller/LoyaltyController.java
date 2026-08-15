@@ -78,6 +78,28 @@ public class LoyaltyController {
         ));
     }
 
+
+    @GetMapping("/customers/{customerId}/orders")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<java.util.List<AdminCustomerOrderResponse>>> customerOrders(
+            @PathVariable Integer customerId) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy lịch sử đơn hàng của khách hàng thành công",
+                loyaltyService.orderHistory(customerId)
+        ));
+    }
+
+    @PatchMapping("/customers/{customerId}/status")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<LoyaltyCustomerResponse>> updateCustomerStatus(
+            @PathVariable Integer customerId,
+            @Valid @RequestBody AdminCustomerStatusRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Cập nhật trạng thái tài khoản khách hàng thành công",
+                loyaltyService.updateAccountStatus(customerId, request)
+        ));
+    }
+
     @PostMapping("/customers/{customerId}/adjust-points")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<LoyaltyCustomerResponse>> adjustPoints(
