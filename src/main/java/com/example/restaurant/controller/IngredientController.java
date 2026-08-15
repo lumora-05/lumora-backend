@@ -95,11 +95,12 @@ public class IngredientController {
 
     @GetMapping("/waste/statistics")
     public ResponseEntity<ApiResponse<InventoryWasteStatisticsResponse>> wasteStatistics(
+            @RequestParam(required = false) Integer ingredientId,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        InventoryWasteStatisticsResponse result = inventoryService.wasteStatistics(from, to);
+        InventoryWasteStatisticsResponse result = inventoryService.wasteStatistics(ingredientId, from, to);
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy thống kê tiêu hủy và hao hụt thành công", result));
     }

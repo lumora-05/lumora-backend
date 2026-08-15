@@ -384,10 +384,14 @@ public class InventoryService {
     }
 
     @Transactional(readOnly = true)
-    public InventoryWasteStatisticsResponse wasteStatistics(LocalDate from, LocalDate to) {
+    public InventoryWasteStatisticsResponse wasteStatistics(Integer ingredientId, LocalDate from, LocalDate to) {
         validateDateRange(from, to);
         Specification<InventoryTransaction> specification = (root, query, cb) ->
                 cb.equal(root.get("loaiGiaoDich"), WASTE);
+        if (ingredientId != null) {
+            specification = specification.and((root, query, cb) ->
+                    cb.equal(root.get("nguyenLieu").get("maNguyenLieu"), ingredientId));
+        }
         if (from != null) {
             LocalDateTime start = from.atStartOfDay();
             specification = specification.and((root, query, cb) ->
