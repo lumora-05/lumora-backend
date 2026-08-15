@@ -49,7 +49,9 @@ public class CategoryService {
             String pattern = "%" + keyword.trim().toLowerCase() + "%";
             specification = specification.and((root, query, criteriaBuilder) -> criteriaBuilder.or(
                     criteriaBuilder.like(criteriaBuilder.lower(root.get("tenDanhMuc")), pattern),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("moTa")), pattern)
+                    criteriaBuilder.like(criteriaBuilder.lower(root.get("tenDanhMucEn")), pattern),
+                    criteriaBuilder.like(criteriaBuilder.lower(root.get("moTa")), pattern),
+                    criteriaBuilder.like(criteriaBuilder.lower(root.get("moTaEn")), pattern)
             ));
         }
         if (active != null) {
@@ -115,11 +117,21 @@ public class CategoryService {
     }
 
     private void apply(Category category, CategoryRequest request) {
-        category.setTenDanhMuc(request.tenDanhMuc());
-        category.setMoTa(request.moTa());
+        category.setTenDanhMuc(request.tenDanhMuc().trim());
+        category.setTenDanhMucEn(trimToNull(request.tenDanhMucEn()));
+        category.setMoTa(trimToNull(request.moTa()));
+        category.setMoTaEn(trimToNull(request.moTaEn()));
         if (request.trangThai() != null) {
             category.setTrangThai(request.trangThai());
         }
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private int normalizePage(int page) {

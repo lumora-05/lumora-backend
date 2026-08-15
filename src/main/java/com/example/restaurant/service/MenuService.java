@@ -68,10 +68,12 @@ public class MenuService {
                 .map(row -> new TopSellingFoodResponse(
                         (Integer) row[0],
                         (String) row[1],
-                        (java.math.BigDecimal) row[2],
-                        (String) row[3],
+                        (String) row[2],
+                        (java.math.BigDecimal) row[3],
                         (String) row[4],
-                        ((Number) row[5]).longValue()
+                        (String) row[5],
+                        (String) row[6],
+                        ((Number) row[7]).longValue()
                 ))
                 .toList();
     }
@@ -104,8 +106,11 @@ public class MenuService {
             String pattern = "%" + keyword.trim().toLowerCase() + "%";
             specification = specification.and((root, query, criteriaBuilder) -> criteriaBuilder.or(
                     criteriaBuilder.like(criteriaBuilder.lower(root.get("tenMonAn")), pattern),
+                    criteriaBuilder.like(criteriaBuilder.lower(root.get("tenMonAnEn")), pattern),
                     criteriaBuilder.like(criteriaBuilder.lower(root.get("moTa")), pattern),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.join("danhMuc").get("tenDanhMuc")), pattern)
+                    criteriaBuilder.like(criteriaBuilder.lower(root.get("moTaEn")), pattern),
+                    criteriaBuilder.like(criteriaBuilder.lower(root.join("danhMuc").get("tenDanhMuc")), pattern),
+                    criteriaBuilder.like(criteriaBuilder.lower(root.join("danhMuc").get("tenDanhMucEn")), pattern)
             ));
         }
         if (categoryId != null) {
@@ -245,6 +250,14 @@ public class MenuService {
         });
     }
 
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private int normalizePage(int page) {
         return Math.max(page, 0);
     }
@@ -260,9 +273,11 @@ public class MenuService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Danh mục món ăn đang bị khóa");
         }
         food.setDanhMuc(category);
-        food.setTenMonAn(request.tenMonAn());
+        food.setTenMonAn(request.tenMonAn().trim());
+        food.setTenMonAnEn(trimToNull(request.tenMonAnEn()));
         food.setGia(request.gia());
-        food.setMoTa(request.moTa());
+        food.setMoTa(trimToNull(request.moTa()));
+        food.setMoTaEn(trimToNull(request.moTaEn()));
         food.setHinhAnh(request.hinhAnh());
         if (request.trangThai() != null) {
             food.setTrangThai(request.trangThai());

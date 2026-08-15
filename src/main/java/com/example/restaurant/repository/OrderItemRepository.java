@@ -33,8 +33,10 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Integer> {
     @Query("""
             select i.monAn.maMonAn,
                    i.monAn.tenMonAn,
+                   i.monAn.tenMonAnEn,
                    i.monAn.gia,
                    i.monAn.moTa,
+                   i.monAn.moTaEn,
                    i.monAn.hinhAnh,
                    sum(i.soLuong)
             from OrderItem i
@@ -48,8 +50,10 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Integer> {
               and upper(i.trangThaiMon) <> 'DA_HUY'
             group by i.monAn.maMonAn,
                      i.monAn.tenMonAn,
+                     i.monAn.tenMonAnEn,
                      i.monAn.gia,
                      i.monAn.moTa,
+                     i.monAn.moTaEn,
                      i.monAn.hinhAnh
             order by sum(i.soLuong) desc, i.monAn.maMonAn asc
             """)

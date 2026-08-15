@@ -901,10 +901,14 @@ public class ChatbotService {
 
     private String foodSearchText(Food food) {
         String category = food.getDanhMuc() == null ? "" : food.getDanhMuc().getTenDanhMuc();
+        String categoryEn = food.getDanhMuc() == null ? "" : food.getDanhMuc().getTenDanhMucEn();
         return normalize(String.join(" ",
                 safe(food.getTenMonAn()),
+                safe(food.getTenMonAnEn()),
                 safe(food.getMoTa()),
-                safe(category)
+                safe(food.getMoTaEn()),
+                safe(category),
+                safe(categoryEn)
         ));
     }
 
@@ -912,10 +916,13 @@ public class ChatbotService {
         return new ChatbotFoodResponse(
                 food.getMaMonAn(),
                 food.getTenMonAn(),
+                food.getTenMonAnEn(),
                 food.getGia(),
                 food.getMoTa(),
+                food.getMoTaEn(),
                 food.getHinhAnh(),
                 food.getDanhMuc() == null ? null : food.getDanhMuc().getTenDanhMuc(),
+                food.getDanhMuc() == null ? null : food.getDanhMuc().getTenDanhMucEn(),
                 Boolean.TRUE.equals(food.getTrangThai())
         );
     }
@@ -925,7 +932,9 @@ public class ChatbotService {
                 promotion.getMaKhuyenMai(),
                 promotion.getMaCode(),
                 promotion.getTenKhuyenMai(),
+                promotion.getTenKhuyenMaiEn(),
                 promotion.getMoTa(),
+                promotion.getMoTaEn(),
                 promotion.getLoaiGiam(),
                 promotion.getGiaTriGiam(),
                 promotion.getGiaTriDonToiThieu(),

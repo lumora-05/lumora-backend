@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 public record DeliveryTrackingItemResponse(
         Integer maMonAn,
         String tenMonAn,
+        String tenMonAnEn,
         String hinhAnh,
         String ghiChu,
         Integer soLuong,

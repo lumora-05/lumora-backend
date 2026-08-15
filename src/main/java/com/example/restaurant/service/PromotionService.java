@@ -63,6 +63,9 @@ public class PromotionService {
             String pattern = "%" + keyword.trim().toLowerCase(Locale.ROOT) + "%";
             specification = specification.and((root, query, criteriaBuilder) -> criteriaBuilder.or(
                     criteriaBuilder.like(criteriaBuilder.lower(root.get("tenKhuyenMai")), pattern),
+                    criteriaBuilder.like(criteriaBuilder.lower(root.get("tenKhuyenMaiEn")), pattern),
+                    criteriaBuilder.like(criteriaBuilder.lower(root.get("moTa")), pattern),
+                    criteriaBuilder.like(criteriaBuilder.lower(root.get("moTaEn")), pattern),
                     criteriaBuilder.like(criteriaBuilder.lower(root.get("maCode")), pattern),
                     criteriaBuilder.like(criteriaBuilder.lower(root.get("loaiGiam")), pattern)
             ));
@@ -335,7 +338,9 @@ public class PromotionService {
                                String normalizedCode) {
         promotion.setMaCode(normalizedCode);
         promotion.setTenKhuyenMai(request.tenKhuyenMai().trim());
+        promotion.setTenKhuyenMaiEn(trimToNull(request.tenKhuyenMaiEn()));
         promotion.setMoTa(trimToNull(request.moTa()));
+        promotion.setMoTaEn(trimToNull(request.moTaEn()));
         promotion.setLoaiGiam(orderPricingService.normalizeType(request.loaiGiam()));
         promotion.setGiaTriGiam(money(request.giaTriGiam()));
         promotion.setGiaTriDonToiThieu(money(defaultMoney(request.giaTriDonToiThieu())));

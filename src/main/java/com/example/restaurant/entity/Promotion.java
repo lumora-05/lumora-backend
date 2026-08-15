@@ -25,8 +25,14 @@ public class Promotion {
     @Column(name = "ten_khuyen_mai", length = 100)
     private String tenKhuyenMai;
 
+    @Column(name = "ten_khuyen_mai_en", length = 150)
+    private String tenKhuyenMaiEn;
+
     @Column(name = "mo_ta", length = 255)
     private String moTa;
+
+    @Column(name = "mo_ta_en", length = 500)
+    private String moTaEn;
 
     /** PERCENT hoặc FIXED. */
     @Column(name = "loai_giam", length = 30)

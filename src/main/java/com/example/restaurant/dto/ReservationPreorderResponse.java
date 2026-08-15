@@ -26,6 +26,7 @@ public record ReservationPreorderResponse(
             Integer maChiTietDatMonTruoc,
             Integer maMonAn,
             String tenMonAn,
+            String tenMonAnEn,
             String hinhAnh,
             Integer soLuong,
             BigDecimal donGia,

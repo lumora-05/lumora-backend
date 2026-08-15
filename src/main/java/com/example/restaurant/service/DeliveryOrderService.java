@@ -1828,6 +1828,7 @@ public class DeliveryOrderService {
             return new DeliveryTrackingItemResponse(
                     sample.getMonAn().getMaMonAn(),
                     sample.getMonAn().getTenMonAn(),
+                    sample.getMonAn().getTenMonAnEn(),
                     sample.getMonAn().getHinhAnh(),
                     sample.getGhiChu(),
                     quantity,

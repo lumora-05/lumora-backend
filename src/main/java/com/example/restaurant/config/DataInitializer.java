@@ -48,26 +48,34 @@ public class DataInitializer {
             if (categoryRepository.count() == 0) {
                 Category monChinh = new Category();
                 monChinh.setTenDanhMuc("Món chính");
+                monChinh.setTenDanhMucEn("Main Courses");
                 monChinh.setMoTa("Các món ăn chính trong thực đơn");
+                monChinh.setMoTaEn("Main dishes on the menu");
                 categoryRepository.save(monChinh);
 
                 Category nuocUong = new Category();
                 nuocUong.setTenDanhMuc("Nước uống");
+                nuocUong.setTenDanhMucEn("Beverages");
                 nuocUong.setMoTa("Đồ uống giải khát");
+                nuocUong.setMoTaEn("Refreshing beverages");
                 categoryRepository.save(nuocUong);
 
                 Food pho = new Food();
                 pho.setDanhMuc(monChinh);
                 pho.setTenMonAn("Phở bò");
+                pho.setTenMonAnEn("Beef Pho");
                 pho.setGia(BigDecimal.valueOf(45000));
                 pho.setMoTa("Phở bò truyền thống");
+                pho.setMoTaEn("Traditional Vietnamese beef pho");
                 foodRepository.save(pho);
 
                 Food traDa = new Food();
                 traDa.setDanhMuc(nuocUong);
                 traDa.setTenMonAn("Trà đá");
+                traDa.setTenMonAnEn("Iced Tea");
                 traDa.setGia(BigDecimal.valueOf(5000));
                 traDa.setMoTa("Trà đá mát lạnh");
+                traDa.setMoTaEn("Refreshing iced tea");
                 foodRepository.save(traDa);
             }
 

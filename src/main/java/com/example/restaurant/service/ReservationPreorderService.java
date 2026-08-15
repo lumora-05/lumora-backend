@@ -488,6 +488,7 @@ public class ReservationPreorderService {
                     item.getMaChiTietDatMonTruoc(),
                     food == null ? null : food.getMaMonAn(),
                     food == null ? null : food.getTenMonAn(),
+                    food == null ? null : food.getTenMonAnEn(),
                     food == null ? null : food.getHinhAnh(),
                     item.getSoLuong(),
                     money(unitPrice),
