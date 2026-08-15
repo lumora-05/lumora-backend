@@ -1,7 +1,7 @@
 package com.example.restaurant.service;
 
 import com.example.restaurant.config.DeliveryProperties;
-import com.example.restaurant.config.OpenRouteServiceProperties;
+import com.example.restaurant.config.VietMapProperties;
 import com.example.restaurant.config.RestaurantInfoProperties;
 import com.example.restaurant.dto.DeliveryAddressSuggestionResponse;
 import com.example.restaurant.dto.DeliveryHandoverRequest;
@@ -92,9 +92,9 @@ public class DeliveryOrderService {
     private final PromotionService promotionService;
     private final PaymentService paymentService;
     private final DeliveryProperties deliveryProperties;
-    private final OpenRouteServiceProperties openRouteServiceProperties;
+    private final VietMapProperties vietMapProperties;
     private final RestaurantInfoProperties restaurantInfoProperties;
-    private final OpenRouteService openRouteService;
+    private final VietMapService vietMapService;
     private final DeliveryProviderService deliveryProviderService;
     private final FoodTraceabilityService foodTraceabilityService;
     private final RealtimeNotificationService realtimeNotificationService;
@@ -109,9 +109,9 @@ public class DeliveryOrderService {
             PromotionService promotionService,
             PaymentService paymentService,
             DeliveryProperties deliveryProperties,
-            OpenRouteServiceProperties openRouteServiceProperties,
+            VietMapProperties vietMapProperties,
             RestaurantInfoProperties restaurantInfoProperties,
-            OpenRouteService openRouteService,
+            VietMapService vietMapService,
             DeliveryProviderService deliveryProviderService,
             FoodTraceabilityService foodTraceabilityService,
             RealtimeNotificationService realtimeNotificationService,
@@ -125,9 +125,9 @@ public class DeliveryOrderService {
         this.promotionService = promotionService;
         this.paymentService = paymentService;
         this.deliveryProperties = deliveryProperties;
-        this.openRouteServiceProperties = openRouteServiceProperties;
+        this.vietMapProperties = vietMapProperties;
         this.restaurantInfoProperties = restaurantInfoProperties;
-        this.openRouteService = openRouteService;
+        this.vietMapService = vietMapService;
         this.deliveryProviderService = deliveryProviderService;
         this.foodTraceabilityService = foodTraceabilityService;
         this.realtimeNotificationService = realtimeNotificationService;
@@ -149,7 +149,7 @@ public class DeliveryOrderService {
             throw unsupportedDeliveryCity(supportedCityText);
         }
 
-        return openRouteService.suggestAddresses(queryText, trimToNull(ward), cityText).stream()
+        return vietMapService.suggestAddresses(queryText, trimToNull(ward), cityText).stream()
                 .map(item -> new DeliveryAddressSuggestionResponse(
                         item.label(),
                         item.name(),
@@ -1214,43 +1214,40 @@ public class DeliveryOrderService {
             throw unsupportedDeliveryCity(supportedCityText);
         }
 
-        // Bản đồ miễn phí: backend tự geocode địa chỉ và tính tuyến đường bằng
-        // openrouteservice (dữ liệu OpenStreetMap). Trình duyệt không cần API key.
-        if (openRouteService.isConfigured() && StringUtils.hasText(fullAddress)) {
-            OpenRouteService.RouteResult route;
+        // Backend dùng VietMap để xác định địa chỉ và tính tuyến đường. API key không đưa xuống frontend.
+        if (vietMapService.isConfigured() && StringUtils.hasText(fullAddress)) {
+            VietMapService.RouteResult route;
             if (StringUtils.hasText(addressSelectionToken)) {
                 // Mô hình kiểu Shopee: khách đã chọn một gợi ý cụ thể. Backend xác minh
                 // token do chính mình cấp và dùng đúng tọa độ đã chọn, không geocode lại
                 // chuỗi nhập dở rồi tự đoán sang một con đường khác.
-                route = openRouteService.computeRouteToSelection(
+                route = vietMapService.computeRouteToSelection(
                         addressSelectionToken,
                         wardText,
                         cityText);
             } else {
                 // Tương thích frontend cũ trong thời gian chuyển đổi.
                 validateTypedDeliveryAddress(fullAddress);
-                route = openRouteService.computeRouteToAddress(
+                route = vietMapService.computeRouteToAddress(
                         fullAddress,
                         wardText,
                         cityText);
             }
 
-            // Với ô địa chỉ nhập tự do, xác minh lại địa phương mà Pelias thực sự trả về.
-            // Nhờ vậy địa chỉ ở Huế/Quảng Nam... không thể bị nhận nhầm thành đường cùng tên
-            // tại Đà Nẵng chỉ vì focus.point đặt gần nhà hàng.
+            // Xác minh lại tỉnh/thành phố mà VietMap trả về để tránh nhận nhầm đường cùng tên ở địa phương khác.
             String resolvedLocationContext = normalizeLocationKey(route.resolvedLocationContext());
             if (StringUtils.hasText(resolvedLocationContext)
                     && !resolvedLocationContext.contains(supportedCity)) {
                 throw unsupportedDeliveryCity(supportedCityText);
             }
             double distanceKm = route.distanceMeters() / 1000.0d;
-            double tier1 = positiveDoubleOrDefault(openRouteServiceProperties.getTier1DistanceKm(), 3.0d);
-            double tier2 = positiveDoubleOrDefault(openRouteServiceProperties.getTier2DistanceKm(), 6.0d);
-            double max = positiveDoubleOrDefault(openRouteServiceProperties.getMaxDeliveryDistanceKm(), 10.0d);
+            double tier1 = positiveDoubleOrDefault(vietMapProperties.getTier1DistanceKm(), 3.0d);
+            double tier2 = positiveDoubleOrDefault(vietMapProperties.getTier2DistanceKm(), 6.0d);
+            double max = positiveDoubleOrDefault(vietMapProperties.getMaxDeliveryDistanceKm(), 10.0d);
             if (tier2 < tier1 || max < tier2) {
                 throw new ResponseStatusException(
                         HttpStatus.INTERNAL_SERVER_ERROR,
-                        "Cấu hình bán kính giao hàng openrouteservice không hợp lệ"
+                        "Cấu hình bán kính giao hàng VietMap không hợp lệ"
                 );
             }
             if (distanceKm > max) {
@@ -1271,15 +1268,15 @@ public class DeliveryOrderService {
             if (distanceKm <= tier1) {
                 area = AREA_RADIUS_3;
                 areaLabel = String.format(Locale.ROOT, "Trong %.0f km", tier1);
-                fee = configuredFee(openRouteServiceProperties.getTier1Fee());
+                fee = configuredFee(vietMapProperties.getTier1Fee());
             } else if (distanceKm <= tier2) {
                 area = AREA_RADIUS_6;
                 areaLabel = String.format(Locale.ROOT, "Từ %.0f đến %.0f km", tier1, tier2);
-                fee = configuredFee(openRouteServiceProperties.getTier2Fee());
+                fee = configuredFee(vietMapProperties.getTier2Fee());
             } else {
                 area = AREA_RADIUS_10;
                 areaLabel = String.format(Locale.ROOT, "Từ %.0f đến %.0f km", tier2, max);
-                fee = configuredFee(openRouteServiceProperties.getTier3Fee());
+                fee = configuredFee(vietMapProperties.getTier3Fee());
             }
 
             return new DeliveryQuoteResponse(
@@ -1300,7 +1297,7 @@ public class DeliveryOrderService {
         }
 
         // Cấu trúc địa chỉ mới không còn dùng quận/huyện để suy ra vùng giao hàng.
-        // Vì phí được tính theo quãng đường thực tế, OpenRouteService phải được cấu hình.
+        // Vì phí được tính theo quãng đường thực tế, VietMapService phải được cấu hình.
         String normalizedCity = normalizeLocationKey(requiredText(city, "Tỉnh/thành phố không hợp lệ"));
         if (!normalizedCity.equals(supportedCity)) {
             throw unsupportedDeliveryCity(supportedCityText);
@@ -1308,7 +1305,7 @@ public class DeliveryOrderService {
 
         throw new ResponseStatusException(
                 HttpStatus.SERVICE_UNAVAILABLE,
-                "Dịch vụ tính khoảng cách giao hàng chưa được cấu hình. Vui lòng cấu hình openrouteservice ở backend"
+                "Dịch vụ tính khoảng cách giao hàng chưa được cấu hình. Vui lòng cấu hình VietMap ở backend"
         );
     }
 

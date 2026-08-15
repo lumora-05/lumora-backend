@@ -2,7 +2,7 @@ package com.example.restaurant.service;
 
 import com.example.restaurant.config.ChatbotAiProperties;
 import com.example.restaurant.config.LoyaltyPolicyProperties;
-import com.example.restaurant.config.OpenRouteServiceProperties;
+import com.example.restaurant.config.VietMapProperties;
 import com.example.restaurant.config.ReservationPolicyProperties;
 import com.example.restaurant.config.RestaurantInfoProperties;
 import com.example.restaurant.config.VietQrProperties;
@@ -39,7 +39,7 @@ public class SystemSettingService {
     private final ReservationPolicyProperties reservationPolicyProperties;
     private final LoyaltyPolicyProperties loyaltyPolicyProperties;
     private final ChatbotAiProperties chatbotAiProperties;
-    private final OpenRouteServiceProperties openRouteServiceProperties;
+    private final VietMapProperties vietMapProperties;
     private final FileStorageService fileStorageService;
     private final SystemActivityService systemActivityService;
 
@@ -49,7 +49,7 @@ public class SystemSettingService {
                                 ReservationPolicyProperties reservationPolicyProperties,
                                 LoyaltyPolicyProperties loyaltyPolicyProperties,
                                 ChatbotAiProperties chatbotAiProperties,
-                                OpenRouteServiceProperties openRouteServiceProperties,
+                                VietMapProperties vietMapProperties,
                                 FileStorageService fileStorageService,
                                 SystemActivityService systemActivityService) {
         this.systemSettingRepository = systemSettingRepository;
@@ -58,7 +58,7 @@ public class SystemSettingService {
         this.reservationPolicyProperties = reservationPolicyProperties;
         this.loyaltyPolicyProperties = loyaltyPolicyProperties;
         this.chatbotAiProperties = chatbotAiProperties;
-        this.openRouteServiceProperties = openRouteServiceProperties;
+        this.vietMapProperties = vietMapProperties;
         this.fileStorageService = fileStorageService;
         this.systemActivityService = systemActivityService;
     }
@@ -304,12 +304,12 @@ public class SystemSettingService {
         setting.setReservationMinimumAdvanceMinutes(DEFAULT_RESERVATION_MINIMUM_ADVANCE_MINUTES);
         setting.setReservationMaximumAdvanceDays(DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS);
 
-        setting.setDeliveryTier1DistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getTier1DistanceKm(), 3.0d));
-        setting.setDeliveryTier2DistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getTier2DistanceKm(), 6.0d));
-        setting.setDeliveryMaxDistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getMaxDeliveryDistanceKm(), 10.0d));
-        setting.setDeliveryTier1Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier1Fee(), new BigDecimal("15000")));
-        setting.setDeliveryTier2Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier2Fee(), new BigDecimal("20000")));
-        setting.setDeliveryTier3Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier3Fee(), new BigDecimal("30000")));
+        setting.setDeliveryTier1DistanceKm(positiveDoubleOrDefault(vietMapProperties.getTier1DistanceKm(), 3.0d));
+        setting.setDeliveryTier2DistanceKm(positiveDoubleOrDefault(vietMapProperties.getTier2DistanceKm(), 6.0d));
+        setting.setDeliveryMaxDistanceKm(positiveDoubleOrDefault(vietMapProperties.getMaxDeliveryDistanceKm(), 10.0d));
+        setting.setDeliveryTier1Fee(nonNegativeMoneyOrDefault(vietMapProperties.getTier1Fee(), new BigDecimal("15000")));
+        setting.setDeliveryTier2Fee(nonNegativeMoneyOrDefault(vietMapProperties.getTier2Fee(), new BigDecimal("20000")));
+        setting.setDeliveryTier3Fee(nonNegativeMoneyOrDefault(vietMapProperties.getTier3Fee(), new BigDecimal("30000")));
 
         setting.setVietQrBankId(cleanOptional(vietQrProperties.getBankId()));
         setting.setVietQrBankName(cleanOptional(vietQrProperties.getBankName()));
@@ -365,27 +365,27 @@ public class SystemSettingService {
         }
 
         if (setting.getDeliveryTier1DistanceKm() == null) {
-            setting.setDeliveryTier1DistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getTier1DistanceKm(), 3.0d));
+            setting.setDeliveryTier1DistanceKm(positiveDoubleOrDefault(vietMapProperties.getTier1DistanceKm(), 3.0d));
             changed = true;
         }
         if (setting.getDeliveryTier2DistanceKm() == null) {
-            setting.setDeliveryTier2DistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getTier2DistanceKm(), 6.0d));
+            setting.setDeliveryTier2DistanceKm(positiveDoubleOrDefault(vietMapProperties.getTier2DistanceKm(), 6.0d));
             changed = true;
         }
         if (setting.getDeliveryMaxDistanceKm() == null) {
-            setting.setDeliveryMaxDistanceKm(positiveDoubleOrDefault(openRouteServiceProperties.getMaxDeliveryDistanceKm(), 10.0d));
+            setting.setDeliveryMaxDistanceKm(positiveDoubleOrDefault(vietMapProperties.getMaxDeliveryDistanceKm(), 10.0d));
             changed = true;
         }
         if (setting.getDeliveryTier1Fee() == null) {
-            setting.setDeliveryTier1Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier1Fee(), new BigDecimal("15000")));
+            setting.setDeliveryTier1Fee(nonNegativeMoneyOrDefault(vietMapProperties.getTier1Fee(), new BigDecimal("15000")));
             changed = true;
         }
         if (setting.getDeliveryTier2Fee() == null) {
-            setting.setDeliveryTier2Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier2Fee(), new BigDecimal("20000")));
+            setting.setDeliveryTier2Fee(nonNegativeMoneyOrDefault(vietMapProperties.getTier2Fee(), new BigDecimal("20000")));
             changed = true;
         }
         if (setting.getDeliveryTier3Fee() == null) {
-            setting.setDeliveryTier3Fee(nonNegativeMoneyOrDefault(openRouteServiceProperties.getTier3Fee(), new BigDecimal("30000")));
+            setting.setDeliveryTier3Fee(nonNegativeMoneyOrDefault(vietMapProperties.getTier3Fee(), new BigDecimal("30000")));
             changed = true;
         }
         validateDeliverySettings(setting);
@@ -490,22 +490,22 @@ public class SystemSettingService {
         );
 
         // Giao hàng theo quãng đường
-        openRouteServiceProperties.setTier1DistanceKm(
+        vietMapProperties.setTier1DistanceKm(
                 positiveDoubleOrDefault(setting.getDeliveryTier1DistanceKm(), 3.0d)
         );
-        openRouteServiceProperties.setTier2DistanceKm(
+        vietMapProperties.setTier2DistanceKm(
                 positiveDoubleOrDefault(setting.getDeliveryTier2DistanceKm(), 6.0d)
         );
-        openRouteServiceProperties.setMaxDeliveryDistanceKm(
+        vietMapProperties.setMaxDeliveryDistanceKm(
                 positiveDoubleOrDefault(setting.getDeliveryMaxDistanceKm(), 10.0d)
         );
-        openRouteServiceProperties.setTier1Fee(
+        vietMapProperties.setTier1Fee(
                 nonNegativeMoneyOrDefault(setting.getDeliveryTier1Fee(), new BigDecimal("15000"))
         );
-        openRouteServiceProperties.setTier2Fee(
+        vietMapProperties.setTier2Fee(
                 nonNegativeMoneyOrDefault(setting.getDeliveryTier2Fee(), new BigDecimal("20000"))
         );
-        openRouteServiceProperties.setTier3Fee(
+        vietMapProperties.setTier3Fee(
                 nonNegativeMoneyOrDefault(setting.getDeliveryTier3Fee(), new BigDecimal("30000"))
         );
 
