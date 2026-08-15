@@ -9,6 +9,7 @@ import com.example.restaurant.dto.DeliveryQuoteResponse;
 import com.example.restaurant.dto.DeliveryReasonRequest;
 import com.example.restaurant.dto.DeliveryTrackingResponse;
 import com.example.restaurant.dto.VietQrResponse;
+import com.example.restaurant.service.CustomerAccountService;
 import com.example.restaurant.service.DeliveryOrderService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -18,8 +19,12 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/customer/delivery")
 public class CustomerDeliveryController {
     private final DeliveryOrderService deliveryOrderService;
-    public CustomerDeliveryController(DeliveryOrderService deliveryOrderService) {
+    private final CustomerAccountService customerAccountService;
+
+    public CustomerDeliveryController(DeliveryOrderService deliveryOrderService,
+                                      CustomerAccountService customerAccountService) {
         this.deliveryOrderService = deliveryOrderService;
+        this.customerAccountService = customerAccountService;
     }
 
 
@@ -48,10 +53,13 @@ public class CustomerDeliveryController {
     /** Khách từ xa đặt món; backend tự kiểm tra điều kiện trước khi nhận đơn. */
     @PostMapping("/orders")
     public ResponseEntity<ApiResponse<DeliveryOrderCreateResponse>> createOrder(
-            @Valid @RequestBody DeliveryOrderCreateRequest request) {
+            @Valid @RequestBody DeliveryOrderCreateRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
         return ResponseEntity.ok(ApiResponse.success(
-                "Đặt món giao tận nơi thành công",
-                deliveryOrderService.createOrder(request)
+                "Đặt món trực tuyến thành công",
+                deliveryOrderService.createOrder(
+                        request,
+                        customerAccountService.resolveOptionalCustomer(authorization))
         ));
     }
 

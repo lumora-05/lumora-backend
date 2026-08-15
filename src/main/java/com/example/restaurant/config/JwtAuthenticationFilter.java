@@ -46,6 +46,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         try {
             String token = authHeader.substring(7);
+
+            // Token CUSTOMER chỉ dùng cho các API khách hàng public có xác thực tùy chọn.
+            // Không đưa token này vào SecurityContext của nhân viên.
+            if ("CUSTOMER".equalsIgnoreCase(jwtService.extractTokenType(token))) {
+                filterChain.doFilter(request, response);
+                return;
+            }
+
             String username = jwtService.extractUsername(token);
 
             if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {

@@ -34,6 +34,27 @@ public class JwtService {
                 .compact();
     }
 
+    public String generateCustomerToken(Integer customerId, String phone) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("tokenType", "CUSTOMER");
+        claims.put("customerId", customerId);
+        return Jwts.builder()
+                .claims(claims)
+                .subject(phone)
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + expirationMs))
+                .signWith(getSignInKey())
+                .compact();
+    }
+
+    public String extractTokenType(String token) {
+        return extractClaim(token, claims -> claims.get("tokenType", String.class));
+    }
+
+    public Integer extractCustomerId(String token) {
+        return extractClaim(token, claims -> claims.get("customerId", Integer.class));
+    }
+
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
     }
