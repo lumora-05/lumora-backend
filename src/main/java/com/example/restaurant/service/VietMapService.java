@@ -164,6 +164,7 @@ public class VietMapService {
 
         AddressSelection selection = verifySelectionToken(selectionToken);
         PlaceResult destination = fetchPlace(selection.refId());
+        verifyDestinationWard(destination, requiredWard);
         verifyDestinationCity(destination, requiredCity);
         return computeRoute(destination);
     }
@@ -211,6 +212,7 @@ public class VietMapService {
                     continue;
                 }
                 PlaceResult destination = fetchPlace(refId);
+                verifyDestinationWard(destination, requiredWard);
                 verifyDestinationCity(destination, requiredCity);
                 return computeRoute(destination);
             }
@@ -326,6 +328,20 @@ public class VietMapService {
         return first ? null : out.toString();
     }
 
+    private void verifyDestinationWard(PlaceResult destination, String requiredWard) {
+        if (!StringUtils.hasText(requiredWard)) {
+            return;
+        }
+
+        String selectedWard = normalizeWardName(requiredWard);
+        String vietMapWard = normalizeWardName(destination.ward());
+        if (!StringUtils.hasText(vietMapWard) || !vietMapWard.equals(selectedWard)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Địa chỉ không thuộc phường/xã đã chọn. Vui lòng chọn lại địa chỉ phù hợp.");
+        }
+    }
+
     private void verifyDestinationCity(PlaceResult destination, String requiredCity) {
         if (StringUtils.hasText(requiredCity)
                 && !matchesLocation(destination.city(), destination.display(), requiredCity)) {
@@ -333,6 +349,13 @@ public class VietMapService {
                     HttpStatus.BAD_REQUEST,
                     "Địa chỉ đã chọn không thuộc tỉnh/thành phố giao hàng");
         }
+    }
+
+    private String normalizeWardName(String value) {
+        String normalized = normalizeText(value);
+        return normalized
+                .replaceFirst("^(phuong|xa|thi tran)\\s+", "")
+                .trim();
     }
 
     private String createSelectionToken(String refId, String label, String ward, String city) {
