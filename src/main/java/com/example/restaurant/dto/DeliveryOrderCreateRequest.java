@@ -19,12 +19,14 @@ public record DeliveryOrderCreateRequest(
         @Pattern(regexp = "^[0-9+ .()-]{9,20}$", message = "Số điện thoại không hợp lệ")
         String soDienThoaiNhan,
         @Email(message = "Email không đúng định dạng") @Size(max = 120) String emailNguoiNhan,
+        /** GIAO_TAN_NOI (mặc định để tương thích client cũ) hoặc TU_DEN_LAY. */
+        @Size(max = 20) String phuongThucNhanHang,
         @Size(max = 50) String soNha,
         @Size(max = 200) String tenDuong,
-        @NotBlank @Size(max = 120) String phuongXa,
+        @Size(max = 120) String phuongXa,
         /** Trường tương thích với client cũ; không còn bắt buộc trong mô hình địa chỉ 2 cấp. */
         @Size(max = 100) String quanHuyen,
-        @NotBlank @Size(max = 100) String tinhThanh,
+        @Size(max = 100) String tinhThanh,
         @Size(max = 500) String thongTinDiaChi,
         /** Trường tương thích với client cũ; client mới dùng soNha + tenDuong. */
         @Size(max = 500) String diaChiChiTiet,

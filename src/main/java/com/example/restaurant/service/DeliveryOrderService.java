@@ -52,6 +52,9 @@ public class DeliveryOrderService {
     public static final String ORDER_TYPE_DELIVERY = "GIAO_HANG";
     public static final String ORDER_SOURCE_WEBSITE = "WEBSITE";
 
+    private static final String FULFILLMENT_DELIVERY = "GIAO_TAN_NOI";
+    private static final String FULFILLMENT_PICKUP = "TU_DEN_LAY";
+
     private static final String AREA_INNER = "NOI_THANH";
     private static final String AREA_NEARBY = "LAN_CAN";
     private static final String AREA_RADIUS_3 = "BAN_KINH_3KM";
@@ -66,6 +69,7 @@ public class DeliveryOrderService {
     private static final String DELIVERY_SCHEDULED = "CHO_DEN_GIO";
     private static final String DELIVERY_PREPARING = "DANG_CHUAN_BI";
     private static final String DELIVERY_WAITING_DRIVER = "CHO_TAI_XE_NHAN";
+    private static final String DELIVERY_WAITING_PICKUP = "CHO_KHACH_NHAN";
     private static final String LEGACY_DELIVERY_WAITING_HANDOVER = "CHO_BAN_GIAO";
     private static final String DELIVERY_IN_TRANSIT = "DANG_GIAO";
     private static final String DELIVERY_AWAITING_RECONCILIATION = "CHO_DOI_SOAT";
@@ -166,6 +170,10 @@ public class DeliveryOrderService {
     @Transactional(readOnly = true)
     public DeliveryQuoteResponse quote(DeliveryQuoteRequest request) {
         ensureRestaurantAcceptingOrders();
+        String fulfillmentMethod = normalizeFulfillmentMethod(request.phuongThucNhanHang());
+        if (FULFILLMENT_PICKUP.equals(fulfillmentMethod)) {
+            return pickupQuote();
+        }
         return resolveDeliveryQuote(
                 request.tinhThanh(),
                 request.phuongXa(),
@@ -209,19 +217,26 @@ public class DeliveryOrderService {
                     "Chỉ hỗ trợ hai phương thức thanh toán: COD và VIETQR");
         }
 
+        String fulfillmentMethod = normalizeFulfillmentMethod(request.phuongThucNhanHang());
         String receiveType = normalize(request.loaiThoiGianNhan());
         LocalDateTime requestedReceiveAt = validateRequestedReceiveTime(
                 receiveType,
                 request.thoiGianNhanMongMuon());
-        String streetAddress = streetAddress(request.soNha(), request.tenDuong(), request.diaChiChiTiet());
 
-        DeliveryQuoteResponse quote = resolveDeliveryQuote(
-                request.tinhThanh(),
-                request.phuongXa(),
-                streetAddress,
-                request.googlePlaceId(),
-                request.googleFormattedAddress(),
-                request.addressSelectionToken());
+        String streetAddress = null;
+        DeliveryQuoteResponse quote;
+        if (FULFILLMENT_PICKUP.equals(fulfillmentMethod)) {
+            quote = pickupQuote();
+        } else {
+            streetAddress = streetAddress(request.soNha(), request.tenDuong(), request.diaChiChiTiet());
+            quote = resolveDeliveryQuote(
+                    request.tinhThanh(),
+                    request.phuongXa(),
+                    streetAddress,
+                    request.googlePlaceId(),
+                    request.googleFormattedAddress(),
+                    request.addressSelectionToken());
+        }
 
         Order order = new Order();
         order.setBanAn(null);
@@ -266,13 +281,14 @@ public class DeliveryOrderService {
         delivery.setTenNguoiNhan(requiredText(request.tenNguoiNhan(), "Tên người nhận không hợp lệ"));
         delivery.setSoDienThoaiNhan(recipientPhone);
         delivery.setEmailNguoiNhan(trimToNull(request.emailNguoiNhan()));
-        delivery.setSoNha(trimToNull(request.soNha()));
-        delivery.setTenDuong(trimToNull(request.tenDuong()));
-        delivery.setDiaChiChiTiet(streetAddress);
-        delivery.setThongTinDiaChi(trimToNull(request.thongTinDiaChi()));
-        delivery.setPhuongXa(trimToNull(request.phuongXa()));
-        delivery.setQuanHuyen(trimToNull(request.quanHuyen()));
-        delivery.setTinhThanh(trimToNull(request.tinhThanh()));
+        delivery.setPhuongThucNhanHang(fulfillmentMethod);
+        delivery.setSoNha(FULFILLMENT_PICKUP.equals(fulfillmentMethod) ? null : trimToNull(request.soNha()));
+        delivery.setTenDuong(FULFILLMENT_PICKUP.equals(fulfillmentMethod) ? null : trimToNull(request.tenDuong()));
+        delivery.setDiaChiChiTiet(FULFILLMENT_PICKUP.equals(fulfillmentMethod) ? null : streetAddress);
+        delivery.setThongTinDiaChi(FULFILLMENT_PICKUP.equals(fulfillmentMethod) ? null : trimToNull(request.thongTinDiaChi()));
+        delivery.setPhuongXa(FULFILLMENT_PICKUP.equals(fulfillmentMethod) ? null : trimToNull(request.phuongXa()));
+        delivery.setQuanHuyen(FULFILLMENT_PICKUP.equals(fulfillmentMethod) ? null : trimToNull(request.quanHuyen()));
+        delivery.setTinhThanh(FULFILLMENT_PICKUP.equals(fulfillmentMethod) ? null : trimToNull(request.tinhThanh()));
         delivery.setDiaChiGiaoHang(quote.diaChiDayDu());
         delivery.setKhuVucGiaoHang(quote.khuVucGiaoHang());
         delivery.setGoogleMaps(Boolean.valueOf(quote.googleMaps()));
@@ -626,6 +642,7 @@ public class DeliveryOrderService {
                 DELIVERY_WAITING_PAYMENT,
                 DELIVERY_PENDING_CONFIRMATION,
                 DELIVERY_SCHEDULED,
+                DELIVERY_WAITING_PICKUP,
                 DELIVERY_IN_TRANSIT,
                 DELIVERY_AWAITING_RECONCILIATION,
                 DELIVERY_COMPLETED,
@@ -678,7 +695,11 @@ public class DeliveryOrderService {
 
         // Không dùng ngưỡng phần trăm món hoàn thành nữa. Điều phối theo thời điểm
         // món dự kiến sẵn sàng để giảm thời gian tài xế phải chờ tại nhà hàng.
-        if (!allCompleted && anyStarted && shouldPreassignDriver(order, delivery) && !hasProviderAssignment(delivery)) {
+        if (!isPickup(delivery)
+                && !allCompleted
+                && anyStarted
+                && shouldPreassignDriver(order, delivery)
+                && !hasProviderAssignment(delivery)) {
             assignDeliveryProvider(order, delivery);
             realtimeNotificationService.notifyDeliveryOrderChanged(
                     "DELIVERY_DRIVER_PREASSIGNED",
@@ -692,9 +713,6 @@ public class DeliveryOrderService {
         }
 
         if (allCompleted) {
-            if (!hasProviderAssignment(delivery)) {
-                assignDeliveryProvider(order, delivery);
-            }
             LocalDateTime readyAt = delivery.getThoiGianSanSang();
             if (readyAt == null) {
                 readyAt = LocalDateTime.now();
@@ -703,12 +721,27 @@ public class DeliveryOrderService {
             if (order.getThoiGianSanSang() == null) {
                 order.setThoiGianSanSang(readyAt);
             }
-            delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_DRIVER);
-            order.setTrangThai(DELIVERY_WAITING_DRIVER);
-            realtimeNotificationService.notifyDeliveryOrderChanged(
-                    "DELIVERY_READY_FOR_HANDOVER",
-                    "Toàn bộ món đã hoàn thành và sẵn sàng bàn giao cho tài xế đã được điều phối",
-                    order);
+
+            if (isPickup(delivery)) {
+                clearProviderAssignment(delivery);
+                clearProviderResult(delivery);
+                delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_PICKUP);
+                order.setTrangThai(DELIVERY_WAITING_PICKUP);
+                realtimeNotificationService.notifyDeliveryOrderChanged(
+                        "PICKUP_READY",
+                        "Đơn đã sẵn sàng để khách đến nhà hàng nhận",
+                        order);
+            } else {
+                if (!hasProviderAssignment(delivery)) {
+                    assignDeliveryProvider(order, delivery);
+                }
+                delivery.setTrangThaiGiaoHang(DELIVERY_WAITING_DRIVER);
+                order.setTrangThai(DELIVERY_WAITING_DRIVER);
+                realtimeNotificationService.notifyDeliveryOrderChanged(
+                        "DELIVERY_READY_FOR_HANDOVER",
+                        "Toàn bộ món đã hoàn thành và sẵn sàng bàn giao cho tài xế đã được điều phối",
+                        order);
+            }
             return;
         }
 
@@ -768,9 +801,15 @@ public class DeliveryOrderService {
     public Order complete(Integer orderId, String username) {
         Order order = lockDeliveryOrder(orderId);
         OrderDelivery delivery = order.getGiaoHang();
-        requireDeliveryStatus(delivery, DELIVERY_AWAITING_RECONCILIATION);
-        if (!PROVIDER_DELIVERED.equals(normalize(delivery.getTrangThaiDoiTac()))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đối tác vận chuyển chưa báo giao thành công");
+        boolean pickup = isPickup(delivery);
+
+        if (pickup) {
+            requireDeliveryStatus(delivery, DELIVERY_WAITING_PICKUP);
+        } else {
+            requireDeliveryStatus(delivery, DELIVERY_AWAITING_RECONCILIATION);
+            if (!PROVIDER_DELIVERED.equals(normalize(delivery.getTrangThaiDoiTac()))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Đối tác vận chuyển chưa báo giao thành công");
+            }
         }
 
         String paymentMethod = normalize(delivery.getPhuongThucThanhToan());
@@ -786,18 +825,24 @@ public class DeliveryOrderService {
 
         delivery.setTrangThaiGiaoHang(DELIVERY_COMPLETED);
         delivery.setThoiGianGiaoThanhCong(
-                delivery.getThoiGianCapNhatDoiTac() == null ? LocalDateTime.now()
+                pickup || delivery.getThoiGianCapNhatDoiTac() == null
+                        ? LocalDateTime.now()
                         : delivery.getThoiGianCapNhatDoiTac());
+        order.setTrangThai(DELIVERY_COMPLETED);
         paymentService.completeDeliveryPayment(order, username);
         Order savedOrder = orderRepository.saveAndFlush(order);
 
         systemActivityService.record(
-                "DELIVERY_COMPLETED",
-                "Đơn " + delivery.getMaVanChuyen() + " đã được ghi nhận hóa đơn sau giao thành công",
+                pickup ? "PICKUP_COMPLETED" : "DELIVERY_COMPLETED",
+                pickup
+                        ? "Khách đã nhận đơn tại nhà hàng #DH" + savedOrder.getMaDonHang()
+                        : "Đơn " + delivery.getMaVanChuyen() + " đã được ghi nhận hóa đơn sau giao thành công",
                 savedOrder.getMaDonHang());
         realtimeNotificationService.notifyDeliveryOrderChanged(
-                "DELIVERY_COMPLETED",
-                "Đã hoàn tất ghi nhận nội bộ cho đơn giao thành công",
+                pickup ? "PICKUP_COMPLETED" : "DELIVERY_COMPLETED",
+                pickup
+                        ? "Khách đã nhận món tại nhà hàng"
+                        : "Đã hoàn tất ghi nhận nội bộ cho đơn giao thành công",
                 savedOrder);
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
         return savedOrder;
@@ -948,6 +993,7 @@ public class DeliveryOrderService {
             }
 
             if (DELIVERY_PREPARING.equals(status)
+                    && !isPickup(delivery)
                     && !hasProviderAssignment(delivery)
                     && hasKitchenStarted(order)
                     && shouldPreassignDriver(order, delivery)) {
@@ -1183,6 +1229,45 @@ public class DeliveryOrderService {
                 : positiveOrDefault(deliveryProperties.getFallbackDeliveryMinutes(), 20) * 60L;
     }
 
+    private String normalizeFulfillmentMethod(String value) {
+        String normalized = normalize(value);
+        if (normalized.isBlank()) {
+            return FULFILLMENT_DELIVERY;
+        }
+        if (!Set.of(FULFILLMENT_DELIVERY, FULFILLMENT_PICKUP).contains(normalized)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Phương thức nhận hàng chỉ hỗ trợ GIAO_TAN_NOI hoặc TU_DEN_LAY");
+        }
+        return normalized;
+    }
+
+    private boolean isPickup(OrderDelivery delivery) {
+        return delivery != null
+                && FULFILLMENT_PICKUP.equals(normalizeFulfillmentMethod(delivery.getPhuongThucNhanHang()));
+    }
+
+    private DeliveryQuoteResponse pickupQuote() {
+        String restaurantAddress = requiredText(
+                restaurantInfoProperties.getAddress(),
+                "Địa chỉ nhà hàng chưa được cấu hình");
+        return new DeliveryQuoteResponse(
+                FULFILLMENT_PICKUP,
+                null,
+                null,
+                null,
+                FULFILLMENT_PICKUP,
+                "Đến lấy tại nhà hàng",
+                BigDecimal.ZERO.setScale(2),
+                restaurantAddress,
+                false,
+                null,
+                0,
+                0L,
+                positiveOrDefault(deliveryProperties.getPreparationMinutes(), 25) * 60L,
+                null);
+    }
+
     private DeliveryQuoteResponse resolveDeliveryQuote(String city,
             String ward,
             String detailedAddress,
@@ -1280,6 +1365,7 @@ public class DeliveryOrderService {
             }
 
             return new DeliveryQuoteResponse(
+                    FULFILLMENT_DELIVERY,
                     cityText,
                     null,
                     wardText,
@@ -1549,6 +1635,7 @@ public class DeliveryOrderService {
                 formatOrderCode(order.getMaDonHang()),
                 delivery.getTrackingToken(),
                 delivery.getTrangThaiGiaoHang(),
+                delivery.getPhuongThucNhanHang(),
                 delivery.getPhuongThucThanhToan(),
                 delivery.getTrangThaiThanhToan(),
                 money(order.getTamTinh()),
@@ -1567,6 +1654,7 @@ public class DeliveryOrderService {
                 delivery.getMaVanChuyen(),
                 order.getTrangThai(),
                 publicDeliveryStatus(delivery.getTrangThaiGiaoHang()),
+                delivery.getPhuongThucNhanHang(),
                 delivery.getTenNguoiNhan(),
                 maskPhone(delivery.getSoDienThoaiNhan()),
                 delivery.getEmailNguoiNhan(),
@@ -1583,7 +1671,9 @@ public class DeliveryOrderService {
                 delivery.getGooglePlaceId(),
                 delivery.getQuangDuongMet(),
                 delivery.getThoiGianDuKienGiay(),
-                estimatedCustomerEtaSeconds(delivery.getThoiGianDuKienGiay()),
+                isPickup(delivery)
+                        ? positiveOrDefault(deliveryProperties.getPreparationMinutes(), 25) * 60L
+                        : estimatedCustomerEtaSeconds(delivery.getThoiGianDuKienGiay()),
                 delivery.getGoogleRoutePolyline(),
                 delivery.getGhiChuGiaoHang(),
                 delivery.getLoaiThoiGianNhan(),

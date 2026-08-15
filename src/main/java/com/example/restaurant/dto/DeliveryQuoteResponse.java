@@ -3,6 +3,7 @@ package com.example.restaurant.dto;
 import java.math.BigDecimal;
 
 public record DeliveryQuoteResponse(
+        String phuongThucNhanHang,
         String tinhThanh,
         String quanHuyen,
         String phuongXa,

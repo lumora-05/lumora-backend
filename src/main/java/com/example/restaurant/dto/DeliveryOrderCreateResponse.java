@@ -8,6 +8,7 @@ public record DeliveryOrderCreateResponse(
         String maDonHangHienThi,
         String trackingToken,
         String trangThaiGiaoHang,
+        String phuongThucNhanHang,
         String phuongThucThanhToan,
         String trangThaiThanhToan,
         BigDecimal tamTinh,

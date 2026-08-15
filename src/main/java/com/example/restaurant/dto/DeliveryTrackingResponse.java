@@ -11,6 +11,7 @@ public record DeliveryTrackingResponse(
         String maVanChuyen,
         String trangThaiDonHang,
         String trangThaiGiaoHang,
+        String phuongThucNhanHang,
         String tenNguoiNhan,
         String soDienThoaiNhanChe,
         String emailNguoiNhan,

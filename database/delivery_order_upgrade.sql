@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS giao_hang_don_hang (
     ten_nguoi_nhan VARCHAR(120) NOT NULL,
     so_dien_thoai_nhan VARCHAR(20) NOT NULL,
     email_nguoi_nhan VARCHAR(120),
+    phuong_thuc_nhan_hang VARCHAR(20) NOT NULL DEFAULT 'GIAO_TAN_NOI',
     dia_chi_giao_hang VARCHAR(500) NOT NULL,
     dia_chi_chi_tiet VARCHAR(500),
     so_nha VARCHAR(50),
@@ -91,6 +92,7 @@ ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ma_van_chuyen VARCHAR(50
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS ten_nguoi_nhan VARCHAR(120);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_dien_thoai_nhan VARCHAR(20);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS email_nguoi_nhan VARCHAR(120);
+ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS phuong_thuc_nhan_hang VARCHAR(20) NOT NULL DEFAULT 'GIAO_TAN_NOI';
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS dia_chi_giao_hang VARCHAR(500);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS dia_chi_chi_tiet VARCHAR(500);
 ALTER TABLE giao_hang_don_hang ADD COLUMN IF NOT EXISTS so_nha VARCHAR(50);

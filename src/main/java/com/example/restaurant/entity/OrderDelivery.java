@@ -55,6 +55,10 @@ public class OrderDelivery {
     @Column(name = "email_nguoi_nhan", length = 120)
     private String emailNguoiNhan;
 
+    /** GIAO_TAN_NOI hoặc TU_DEN_LAY. */
+    @Column(name = "phuong_thuc_nhan_hang", length = 20)
+    private String phuongThucNhanHang = "GIAO_TAN_NOI";
+
     @Column(name = "dia_chi_giao_hang", length = 500, nullable = false)
     private String diaChiGiaoHang;
 
@@ -223,6 +227,9 @@ public class OrderDelivery {
         if (googleMaps == null) {
             googleMaps = false;
         }
+        if (phuongThucNhanHang == null || phuongThucNhanHang.isBlank()) {
+            phuongThucNhanHang = "GIAO_TAN_NOI";
+        }
         if (trangThaiThanhToan == null || trangThaiThanhToan.isBlank()) {
             trangThaiThanhToan = "CHO_THANH_TOAN";
         }
@@ -254,6 +261,9 @@ public class OrderDelivery {
         }
         if (googleMaps == null) {
             googleMaps = false;
+        }
+        if (phuongThucNhanHang == null || phuongThucNhanHang.isBlank()) {
+            phuongThucNhanHang = "GIAO_TAN_NOI";
         }
         if (loaiThoiGianNhan == null || loaiThoiGianNhan.isBlank()) {
             loaiThoiGianNhan = "SOM_NHAT";
