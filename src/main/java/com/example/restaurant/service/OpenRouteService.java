@@ -25,6 +25,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class OpenRouteService {
@@ -35,6 +36,13 @@ public class OpenRouteService {
     private final String selectionSigningSecret;
 
     private static final long ADDRESS_SELECTION_TTL_MILLIS = 20L * 60L * 1000L;
+
+    /**
+     * Cache phạm vi phường/xã đã tra từ Pelias để autocomplete không phải gọi thêm
+     * một request địa giới sau mỗi ký tự người dùng gõ.
+     */
+    private final Map<String, WardSearchScope> wardSearchScopeCache = new ConcurrentHashMap<>();
+    private final Set<String> wardSearchScopeMisses = ConcurrentHashMap.newKeySet();
 
     /**
      * Cache tọa độ nhà hàng theo chính địa chỉ đang có trong Cài đặt hệ thống.
@@ -295,10 +303,19 @@ public class OpenRouteService {
         String ward = cleanupSpaces(requiredWard);
         String requiredAdministrativeArea = normalizeAdministrativeText(city);
         String normalizedWard = normalizeWardText(ward);
+        WardSearchScope wardScope = resolveWardSearchScope(ward, city);
 
+        /*
+         * Khi Pelias tìm được đúng đối tượng hành chính của phường/xã, dùng
+         * boundary.gid để chỉ lấy các địa chỉ có parent thuộc phường/xã đó.
+         * Đây là cách lọc theo hierarchy của Pelias, tốt hơn việc chỉ nối tên
+         * phường/xã vào chuỗi tìm kiếm.
+         */
         StringBuilder text = new StringBuilder(cleanupSpaces(query));
-        if (StringUtils.hasText(ward)) {
-            text.append(", ").append(ward);
+        if (wardScope == null || !StringUtils.hasText(wardScope.gid())) {
+            if (StringUtils.hasText(ward)) {
+                text.append(", ").append(ward);
+            }
         }
         if (StringUtils.hasText(city)) {
             text.append(", ").append(city);
@@ -307,7 +324,8 @@ public class OpenRouteService {
         UriComponentsBuilder builder = UriComponentsBuilder
                 .fromUriString(properties.getAutocompleteUrl().trim())
                 .queryParam("text", text.toString())
-                .queryParam("size", 8)
+                .queryParam("size", 20)
+                .queryParam("layers", "address,venue,street")
                 .queryParam(
                         "boundary.country",
                         StringUtils.hasText(properties.getCountryCode())
@@ -318,6 +336,16 @@ public class OpenRouteService {
                         StringUtils.hasText(properties.getLanguageCode())
                                 ? properties.getLanguageCode().trim()
                                 : "vi");
+
+        if (wardScope != null) {
+            if (StringUtils.hasText(wardScope.gid())) {
+                builder.queryParam("boundary.gid", wardScope.gid());
+            }
+            if (wardScope.center() != null) {
+                builder.queryParam("focus.point.lon", wardScope.center().longitude())
+                        .queryParam("focus.point.lat", wardScope.center().latitude());
+            }
+        }
 
         URI uri = builder.build().encode().toUri();
         String requestedHouseNumber = extractLeadingHouseNumber(query);
@@ -334,13 +362,18 @@ public class OpenRouteService {
                 return List.of();
             }
 
-            List<AddressSuggestion> suggestions = new ArrayList<>();
+            List<AddressSuggestion> wardMatched = new ArrayList<>();
+            List<AddressSuggestion> wardUnknown = new ArrayList<>();
             Set<String> dedupe = new LinkedHashSet<>();
 
             for (JsonNode feature : features) {
                 if (isTooCoarse(feature)
-                        || !matchesAdministrativeArea(feature, requiredAdministrativeArea)
-                        || !matchesWard(feature, normalizedWard)) {
+                        || !matchesAdministrativeArea(feature, requiredAdministrativeArea)) {
+                    continue;
+                }
+
+                WardMatch wardMatch = classifyWardMatch(feature, normalizedWard);
+                if (wardMatch == WardMatch.MISMATCH) {
                     continue;
                 }
 
@@ -369,60 +402,299 @@ public class OpenRouteService {
                     continue;
                 }
 
-                String label = parsed.formattedAddress();
-                String dedupeKey = normalizeAddressText(label) + "|" + longitude + "|" + latitude;
+                String rawLabel = parsed.formattedAddress();
+                String featureCity = StringUtils.hasText(city)
+                        ? city
+                        : firstNonBlank(
+                                propertiesNode.path("region").asText(""),
+                                propertiesNode.path("locality").asText(""),
+                                propertiesNode.path("localadmin").asText(""));
+                String name = firstNonBlank(
+                        propertiesNode.path("name").asText(""),
+                        rawLabel);
+                String street = normalizeStreetDisplay(firstNonBlank(
+                        propertiesNode.path("street").asText(""),
+                        extractRequestedStreetName(rawLabel),
+                        name));
+
+                /*
+                 * Chỉ dùng tên phường/xã mà người dùng đã chọn trong label nếu Pelias
+                 * đã chứng minh feature thuộc đúng phường/xã (MATCH) hoặc request đã
+                 * được khóa bằng boundary.gid của chính phường/xã đó.
+                 */
+                boolean wardScopedByGid = wardScope != null
+                        && StringUtils.hasText(wardScope.gid());
+                String verifiedWard = (wardMatch == WardMatch.MATCH || wardScopedByGid)
+                        ? ward
+                        : "";
+                String responseWard = verifiedWard;
+                String friendlyLabel = buildSuggestionPrimaryLabel(
+                        houseNumber,
+                        street,
+                        name);
+                String resolvedLabel = buildResolvedSuggestionLabel(
+                        friendlyLabel,
+                        verifiedWard,
+                        featureCity);
+
+                String dedupeKey = normalizeAddressText(friendlyLabel)
+                        + "|" + longitude + "|" + latitude;
                 if (!dedupe.add(dedupeKey)) {
                     continue;
                 }
 
-                String featureWard = firstNonBlank(
-                        propertiesNode.path("ward").asText(""),
-                        propertiesNode.path("neighbourhood").asText(""),
-                        propertiesNode.path("locality").asText(""),
-                        propertiesNode.path("localadmin").asText(""));
-                String featureCity = firstNonBlank(
-                        propertiesNode.path("region").asText(""),
-                        propertiesNode.path("locality").asText(""),
-                        propertiesNode.path("localadmin").asText(""),
-                        city);
-                String name = firstNonBlank(
-                        propertiesNode.path("name").asText(""),
-                        label);
-                String street = firstNonBlank(
-                        propertiesNode.path("street").asText(""),
-                        extractRequestedStreetName(label));
-
                 String selectionToken = createSelectionToken(
                         longitude,
                         latitude,
-                        label,
+                        resolvedLabel,
                         parsed.locationContext(),
                         normalizedWard,
                         requiredAdministrativeArea);
 
-                suggestions.add(new AddressSuggestion(
-                        label,
+                AddressSuggestion suggestion = new AddressSuggestion(
+                        friendlyLabel,
                         name,
                         houseNumber,
                         street,
-                        featureWard,
+                        responseWard,
                         featureCity,
                         latitude,
                         longitude,
-                        selectionToken));
+                        selectionToken);
 
-                if (suggestions.size() >= 6) {
-                    break;
+                if (wardMatch == WardMatch.MATCH || wardScopedByGid) {
+                    wardMatched.add(suggestion);
+                } else {
+                    wardUnknown.add(suggestion);
                 }
             }
 
-            return List.copyOf(suggestions);
+            /*
+             * Nếu có kết quả chứng minh được đúng phường/xã thì chỉ trả nhóm đó.
+             * Nhóm UNKNOWN chỉ là fallback khi dữ liệu Pelias thiếu cấp phường, để
+             * không quay lại lỗi "đúng địa chỉ nhưng bị từ chối" trước đây.
+             */
+            List<AddressSuggestion> selected = !wardMatched.isEmpty()
+                    ? wardMatched
+                    : wardUnknown;
+
+            if (selected.size() <= 6) {
+                return List.copyOf(selected);
+            }
+            return List.copyOf(selected.subList(0, 6));
         } catch (RestClientException ex) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
                     "Không thể tải gợi ý địa chỉ từ openrouteservice",
                     ex);
         }
+    }
+
+    /**
+     * Tra đúng đối tượng hành chính của phường/xã để lấy Pelias gid. Autocomplete
+     * hỗ trợ boundary.gid, vì vậy khi có gid kết quả được lọc theo parent hierarchy
+     * thay vì chỉ xếp hạng trên toàn thành phố.
+     */
+    private WardSearchScope resolveWardSearchScope(String ward, String city) {
+        if (!StringUtils.hasText(ward) || !StringUtils.hasText(city)
+                || !isConfigured()) {
+            return null;
+        }
+
+        String normalizedWard = normalizeWardText(ward);
+        String normalizedCity = normalizeAdministrativeText(city);
+        if (!StringUtils.hasText(normalizedWard) || !StringUtils.hasText(normalizedCity)) {
+            return null;
+        }
+
+        String cacheKey = normalizedCity + "|" + normalizedWard;
+        WardSearchScope cached = wardSearchScopeCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+        if (wardSearchScopeMisses.contains(cacheKey)) {
+            return null;
+        }
+
+        UriComponentsBuilder builder = UriComponentsBuilder
+                .fromUriString(properties.getGeocodeUrl().trim())
+                .queryParam("text", cleanupSpaces(ward) + ", " + cleanupSpaces(city) + ", Việt Nam")
+                .queryParam("size", 10)
+                .queryParam("layers", "neighbourhood,borough,locality,localadmin")
+                .queryParam(
+                        "boundary.country",
+                        StringUtils.hasText(properties.getCountryCode())
+                                ? properties.getCountryCode().trim()
+                                : "VN")
+                .queryParam(
+                        "lang",
+                        StringUtils.hasText(properties.getLanguageCode())
+                                ? properties.getLanguageCode().trim()
+                                : "vi");
+
+        try {
+            JsonNode response = restClient.get()
+                    .uri(builder.build().encode().toUri())
+                    .header("Authorization", properties.getApiKey().trim())
+                    .retrieve()
+                    .body(JsonNode.class);
+
+            JsonNode features = response == null ? null : response.path("features");
+            if (features != null && features.isArray()) {
+                for (JsonNode feature : features) {
+                    if (!matchesAdministrativeArea(feature, normalizedCity)
+                            || !matchesWardFeatureName(feature, normalizedWard)) {
+                        continue;
+                    }
+
+                    JsonNode propertiesNode = feature.path("properties");
+                    String gid = cleanupSpaces(propertiesNode.path("gid").asText(""));
+                    Coordinate center = parseCoordinate(feature);
+                    if (!StringUtils.hasText(gid) && center == null) {
+                        continue;
+                    }
+
+                    WardSearchScope resolved = new WardSearchScope(gid, center);
+                    wardSearchScopeCache.put(cacheKey, resolved);
+                    return resolved;
+                }
+            }
+        } catch (RestClientException ignored) {
+            // Lỗi mạng tạm thời không được cache như một "phường không tồn tại".
+            return null;
+        }
+
+        wardSearchScopeMisses.add(cacheKey);
+        return null;
+    }
+
+    private Coordinate parseCoordinate(JsonNode feature) {
+        JsonNode coordinates = feature.path("geometry").path("coordinates");
+        if (!coordinates.isArray() || coordinates.size() < 2) {
+            return null;
+        }
+
+        double longitude = coordinates.get(0).asDouble(Double.NaN);
+        double latitude = coordinates.get(1).asDouble(Double.NaN);
+        if (!Double.isFinite(longitude) || !Double.isFinite(latitude)) {
+            return null;
+        }
+        return new Coordinate(longitude, latitude);
+    }
+
+    private boolean matchesWardFeatureName(JsonNode feature, String normalizedWard) {
+        if (!StringUtils.hasText(normalizedWard)) {
+            return false;
+        }
+
+        JsonNode propertiesNode = feature.path("properties");
+        String[] directFields = {
+                "name", "ward", "neighbourhood", "borough", "locality", "localadmin"
+        };
+        for (String field : directFields) {
+            String candidate = normalizeWardText(propertiesNode.path(field).asText(""));
+            if (sameWard(normalizedWard, candidate)) {
+                return true;
+            }
+        }
+
+        String label = propertiesNode.path("label").asText("");
+        if (StringUtils.hasText(label)) {
+            String[] parts = label.split(",");
+            for (String part : parts) {
+                if (sameWard(normalizedWard, normalizeWardText(part))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private WardMatch classifyWardMatch(JsonNode feature, String requiredWard) {
+        if (!StringUtils.hasText(requiredWard)) {
+            return WardMatch.UNKNOWN;
+        }
+
+        JsonNode propertiesNode = feature.path("properties");
+
+        String explicitWard = normalizeWardText(propertiesNode.path("ward").asText(""));
+        if (StringUtils.hasText(explicitWard)) {
+            return sameWard(requiredWard, explicitWard)
+                    ? WardMatch.MATCH
+                    : WardMatch.MISMATCH;
+        }
+
+        String[] softAdministrativeFields = {
+                "neighbourhood", "borough", "locality", "localadmin",
+                "district", "county"
+        };
+        for (String field : softAdministrativeFields) {
+            String raw = cleanupSpaces(propertiesNode.path(field).asText(""));
+            if (!StringUtils.hasText(raw)) {
+                continue;
+            }
+            if (sameWard(requiredWard, normalizeWardText(raw))) {
+                return WardMatch.MATCH;
+            }
+        }
+
+        String label = propertiesNode.path("label").asText("");
+        if (StringUtils.hasText(label)) {
+            String[] labelParts = label.split(",");
+            for (int i = 1; i < labelParts.length; i++) {
+                String part = cleanupSpaces(labelParts[i]);
+                if (sameWard(requiredWard, normalizeWardText(part))) {
+                    return WardMatch.MATCH;
+                }
+
+                // "Phường/Xã ..." trong label là bằng chứng trực tiếp, khác thì loại.
+                String normalizedPart = removeVietnameseDiacritics(part).toLowerCase();
+                if (normalizedPart.matches(".*\\b(phuong|xa|thi tran|ward|commune|township)\\b.*")) {
+                    return WardMatch.MISMATCH;
+                }
+            }
+        }
+
+        return WardMatch.UNKNOWN;
+    }
+
+    private String normalizeStreetDisplay(String value) {
+        String cleaned = cleanupSpaces(value);
+        if (!StringUtils.hasText(cleaned)) {
+            return "";
+        }
+
+        return cleaned
+                .replaceFirst("(?iu)^\\d+[A-Za-z]?[/\\-\\dA-Za-z]*\\s+", "")
+                .replaceFirst("(?iu)^(đường|duong|street|road)\\s+", "")
+                .trim();
+    }
+
+    private String buildSuggestionPrimaryLabel(
+            String houseNumber,
+            String street,
+            String fallbackName) {
+        if (StringUtils.hasText(houseNumber) && StringUtils.hasText(street)) {
+            return cleanupSpaces(houseNumber + " " + street);
+        }
+        return cleanupSpaces(fallbackName);
+    }
+
+    private String buildResolvedSuggestionLabel(
+            String primary,
+            String verifiedWard,
+            String city) {
+        List<String> parts = new ArrayList<>();
+        if (StringUtils.hasText(primary)) {
+            parts.add(cleanupSpaces(primary));
+        }
+        if (StringUtils.hasText(verifiedWard)) {
+            parts.add(cleanupSpaces(verifiedWard));
+        }
+        if (StringUtils.hasText(city)) {
+            parts.add(cleanupSpaces(city));
+        }
+        return String.join(", ", parts);
     }
 
     private String firstNonBlank(String... values) {
@@ -1332,6 +1604,17 @@ public class OpenRouteService {
             Double latitude,
             Double longitude,
             String selectionToken) {
+    }
+
+    private enum WardMatch {
+        MATCH,
+        MISMATCH,
+        UNKNOWN
+    }
+
+    private record WardSearchScope(
+            String gid,
+            Coordinate center) {
     }
 
     private enum GeocodeTarget {
