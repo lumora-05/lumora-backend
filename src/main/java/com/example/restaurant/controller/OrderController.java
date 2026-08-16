@@ -72,6 +72,7 @@ public class OrderController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "ALL") String status,
+            @RequestParam(required = false) String orderType,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false)
@@ -83,6 +84,7 @@ public class OrderController {
                         size,
                         keyword,
                         status,
+                        orderType,
                         from,
                         to,
                         isKitchenOnly(authentication),

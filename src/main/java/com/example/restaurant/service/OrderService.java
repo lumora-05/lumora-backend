@@ -179,11 +179,21 @@ public class OrderService {
                                 int size,
                                 String keyword,
                                 String status,
+                                String orderType,
                                 LocalDate from,
                                 LocalDate to,
                                 boolean kitchenOnly,
                                 String waiterUsername) {
         Specification<Order> specification = (root, query, criteriaBuilder) -> criteriaBuilder.conjunction();
+
+        if (StringUtils.hasText(orderType) && !"ALL".equalsIgnoreCase(orderType.trim())) {
+            String normalizedOrderType = orderType.trim().toUpperCase();
+            specification = specification.and((root, query, criteriaBuilder) ->
+                    criteriaBuilder.equal(
+                            criteriaBuilder.upper(criteriaBuilder.coalesce(root.<String>get("loaiDon"), "TAI_BAN")),
+                            normalizedOrderType
+                    ));
+        }
 
         if (kitchenOnly) {
             specification = specification.and((root, query, criteriaBuilder) -> {
