@@ -6,6 +6,9 @@ public record AuthResponse(
         String role,
         String fullName,
         Integer maNhanVien,
-        String anhDaiDien
+        String anhDaiDien,
+        Integer maKhachHang,
+        String soDienThoai,
+        Integer diemTichLuy
 ) {
 }
