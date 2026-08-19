@@ -359,13 +359,14 @@ public class OrderService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn hàng: " + id));
     }
 
-    /** API khách tại bàn không được đọc hoặc thao tác đơn giao hàng bằng mã tăng dần. */
+    /**
+     * API khách tại bàn chỉ được đọc đơn thuộc đúng bàn của mã QR hiện tại.
+     * Không cho phép truy cập đơn chỉ bằng mã tăng dần vì orderId có thể đoán được.
+     */
     @Transactional(readOnly = true)
-    public Order findTableOrderForCustomer(Integer id) {
+    public Order findTableOrderForCustomer(String qrToken, Integer id) {
         Order order = findById(id);
-        if (order.isDeliveryOrder()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn hàng tại bàn");
-        }
+        ensureCustomerQrOwnsOrder(qrToken, order);
         return order;
     }
 
@@ -650,14 +651,13 @@ public class OrderService {
      * Chỉ chuyển đơn đã phục vụ sang chờ thanh toán, không nhận trạng thái tùy ý từ client.
      */
     @Transactional
-    public Order requestPaymentByCustomer(Integer orderId) {
-        Order order = findById(orderId);
-        if (order.isDeliveryOrder()) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Đơn giao hàng được thanh toán theo quy trình giao tận nơi"
-            );
-        }
+    public Order requestPaymentByCustomer(String qrToken, Integer orderId) {
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Không tìm thấy đơn hàng: " + orderId
+                ));
+        ensureCustomerQrOwnsOrder(qrToken, order);
         String currentStatus = normalizeStatus(order.getTrangThai());
 
         // Cho phép gọi lặp lại an toàn khi request trước đã được xử lý thành công.
@@ -687,6 +687,30 @@ public class OrderService {
         realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
         return savedOrder;
+    }
+
+    /** Khách chỉ được áp dụng khuyến mãi cho đơn thuộc đúng bàn của QR hiện tại. */
+    @Transactional
+    public Order applyPromotionByCustomer(String qrToken, Integer orderId, String code) {
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Không tìm thấy đơn hàng: " + orderId
+                ));
+        ensureCustomerQrOwnsOrder(qrToken, order);
+        return promotionService.applyToOrder(orderId, code);
+    }
+
+    /** Khách chỉ được gỡ khuyến mãi khỏi đơn thuộc đúng bàn của QR hiện tại. */
+    @Transactional
+    public Order removePromotionByCustomer(String qrToken, Integer orderId) {
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Không tìm thấy đơn hàng: " + orderId
+                ));
+        ensureCustomerQrOwnsOrder(qrToken, order);
+        return promotionService.removeFromOrder(orderId);
     }
 
     /**
@@ -1706,25 +1730,30 @@ public class OrderService {
     }
 
     private DiningTable resolveCustomerTableForOrder(OrderCreateRequest request) {
-        if (StringUtils.hasText(request.qrToken())) {
-            String qrToken = request.qrToken().trim();
-            DiningTable selectedTable = diningTableRepository.findByQrTokenForUpdate(qrToken)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Mã QR không hợp lệ"));
-            validateCustomerQrCanOrder(selectedTable);
-            return tableArrangementService.resolvePrimaryTableForUpdate(selectedTable);
+        if (!StringUtils.hasText(request.qrToken())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "QR token không được để trống");
         }
 
-        // Giữ tương thích tạm thời với frontend cũ trong thời gian chuyển sang QR token.
-        if (request.maBan() != null) {
-            DiningTable selectedTable = diningTableRepository.findByIdForUpdate(request.maBan())
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.NOT_FOUND,
-                            "Không tìm thấy bàn ăn: " + request.maBan()
-                    ));
-            return tableArrangementService.resolvePrimaryTableForUpdate(selectedTable);
+        String qrToken = request.qrToken().trim();
+        DiningTable selectedTable = diningTableRepository.findByQrTokenForUpdate(qrToken)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Mã QR không hợp lệ"));
+        validateCustomerQrCanOrder(selectedTable);
+        return tableArrangementService.resolvePrimaryTableForUpdate(selectedTable);
+    }
+
+    private void ensureCustomerQrOwnsOrder(String qrToken, Order order) {
+        DiningTable scannedTable = resolveCustomerTableByQrToken(qrToken);
+        if (order == null || order.isDeliveryOrder() || order.getBanAn() == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn hàng tại bàn");
         }
 
-        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "QR token không được để trống");
+        Integer effectiveTableId = tableArrangementService.resolvePrimaryTableId(scannedTable.getMaBan());
+        if (!Objects.equals(order.getBanAn().getMaBan(), effectiveTableId)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Đơn hàng không thuộc bàn của mã QR hiện tại"
+            );
+        }
     }
 
     private void validateCustomerQrCanOrder(DiningTable table) {

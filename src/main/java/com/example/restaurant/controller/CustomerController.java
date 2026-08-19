@@ -112,11 +112,13 @@ public class CustomerController {
         return ResponseEntity.ok(ApiResponse.success("Đã gửi đơn hàng trực tiếp vào bếp", order));
     }
 
-    @GetMapping("/orders/{orderId}")
-    public ResponseEntity<ApiResponse<Order>> orderTracking(@PathVariable Integer orderId) {
+    @GetMapping("/qr/{qrToken}/orders/{orderId}")
+    public ResponseEntity<ApiResponse<Order>> orderTracking(
+            @PathVariable String qrToken,
+            @PathVariable Integer orderId) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Theo dõi trạng thái đơn hàng thành công",
-                orderService.findTableOrderForCustomer(orderId)
+                orderService.findTableOrderForCustomer(qrToken, orderId)
         ));
     }
 
@@ -124,11 +126,13 @@ public class CustomerController {
      * Khách yêu cầu thanh toán sau khi đơn đã được phục vụ.
      * Endpoint riêng không cho phép khách tự truyền trạng thái đơn hàng.
      */
-    @PostMapping("/orders/{orderId}/request-payment")
-    public ResponseEntity<ApiResponse<Order>> requestPayment(@PathVariable Integer orderId) {
+    @PostMapping("/qr/{qrToken}/orders/{orderId}/request-payment")
+    public ResponseEntity<ApiResponse<Order>> requestPayment(
+            @PathVariable String qrToken,
+            @PathVariable Integer orderId) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Đã gửi yêu cầu thanh toán đến thu ngân",
-                orderService.requestPaymentByCustomer(orderId)
+                orderService.requestPaymentByCustomer(qrToken, orderId)
         ));
     }
 
@@ -149,24 +153,25 @@ public class CustomerController {
     }
 
     /** Khách áp dụng một mã khuyến mãi cho đơn đã được phục vụ. */
-    @PostMapping("/orders/{orderId}/promotion")
+    @PostMapping("/qr/{qrToken}/orders/{orderId}/promotion")
     public ResponseEntity<ApiResponse<Order>> applyPromotion(
+            @PathVariable String qrToken,
             @PathVariable Integer orderId,
             @Valid @RequestBody PromotionCodeRequest request) {
-        orderService.findTableOrderForCustomer(orderId);
         return ResponseEntity.ok(ApiResponse.success(
                 "Áp dụng khuyến mãi thành công",
-                promotionService.applyToOrder(orderId, request.maCode())
+                orderService.applyPromotionByCustomer(qrToken, orderId, request.maCode())
         ));
     }
 
     /** Khách gỡ mã khuyến mãi trước khi thanh toán. */
-    @DeleteMapping("/orders/{orderId}/promotion")
-    public ResponseEntity<ApiResponse<Order>> removePromotion(@PathVariable Integer orderId) {
-        orderService.findTableOrderForCustomer(orderId);
+    @DeleteMapping("/qr/{qrToken}/orders/{orderId}/promotion")
+    public ResponseEntity<ApiResponse<Order>> removePromotion(
+            @PathVariable String qrToken,
+            @PathVariable Integer orderId) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Gỡ khuyến mãi thành công",
-                promotionService.removeFromOrder(orderId)
+                orderService.removePromotionByCustomer(qrToken, orderId)
         ));
     }
 
