@@ -11,6 +11,7 @@ import com.example.restaurant.service.DeliveryOrderService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
@@ -28,19 +29,33 @@ public class DeliveryOrderController {
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER','KITCHEN')")
     public ResponseEntity<ApiResponse<List<Order>>> all(
-            @RequestParam(required = false) String deliveryStatus) {
-        List<Order> orders = deliveryStatus == null || deliveryStatus.isBlank()
-                ? deliveryOrderService.findAll()
-                : deliveryOrderService.findByDeliveryStatus(deliveryStatus);
+            @RequestParam(required = false) String deliveryStatus,
+            Authentication authentication) {
+        boolean kitchenOnly = isKitchenOnly(authentication);
+        List<Order> orders;
+        if (deliveryStatus == null || deliveryStatus.isBlank()) {
+            orders = kitchenOnly
+                    ? deliveryOrderService.findAllForKitchen()
+                    : deliveryOrderService.findAll();
+        } else {
+            orders = kitchenOnly
+                    ? deliveryOrderService.findByDeliveryStatusForKitchen(deliveryStatus)
+                    : deliveryOrderService.findByDeliveryStatus(deliveryStatus);
+        }
         return ResponseEntity.ok(ApiResponse.success("Lấy danh sách đơn giao hàng thành công", orders));
     }
 
     @GetMapping("/{orderId}")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER','KITCHEN')")
-    public ResponseEntity<ApiResponse<Order>> detail(@PathVariable Integer orderId) {
+    public ResponseEntity<ApiResponse<Order>> detail(
+            @PathVariable Integer orderId,
+            Authentication authentication) {
+        Order order = isKitchenOnly(authentication)
+                ? deliveryOrderService.findByIdForKitchen(orderId)
+                : deliveryOrderService.findById(orderId);
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy chi tiết đơn giao hàng thành công",
-                deliveryOrderService.findById(orderId)
+                order
         ));
     }
 
@@ -147,4 +162,16 @@ public class DeliveryOrderController {
                 deliveryOrderService.retry(orderId)
         ));
     }
+
+    private boolean isKitchenOnly(Authentication authentication) {
+        if (authentication == null) {
+            return false;
+        }
+        boolean kitchen = authentication.getAuthorities().stream()
+                .anyMatch(authority -> "ROLE_KITCHEN".equals(authority.getAuthority()));
+        boolean admin = authentication.getAuthorities().stream()
+                .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+        return kitchen && !admin;
+    }
+
 }

@@ -364,6 +364,18 @@ public class DeliveryOrderService {
         return orderRepository.findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(ORDER_TYPE_DELIVERY);
     }
 
+    /**
+     * Danh sách dành riêng cho bếp: chỉ hiển thị đơn đã được nhà hàng xác nhận
+     * và thực sự đến thời điểm chuyển xuống bếp. Đơn chờ thanh toán, chờ xác nhận,
+     * đơn hẹn giờ chưa đến giờ và đơn bị hủy/từ chối trước khi xác nhận đều bị ẩn.
+     */
+    @Transactional(readOnly = true)
+    public List<Order> findAllForKitchen() {
+        return findAll().stream()
+                .filter(this::isVisibleToKitchen)
+                .toList();
+    }
+
     @Transactional(readOnly = true)
     public List<DeliveryTrackingResponse> findByCustomer(Integer customerId) {
         return orderRepository
@@ -386,11 +398,41 @@ public class DeliveryOrderService {
     }
 
     @Transactional(readOnly = true)
+    public List<Order> findByDeliveryStatusForKitchen(String status) {
+        return findByDeliveryStatus(status).stream()
+                .filter(this::isVisibleToKitchen)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public Order findById(Integer orderId) {
         return requireDeliveryOrder(orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy đơn giao hàng: " + orderId)));
+    }
+
+    @Transactional(readOnly = true)
+    public Order findByIdForKitchen(Integer orderId) {
+        Order order = findById(orderId);
+        if (!isVisibleToKitchen(order)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Đơn giao hàng chưa đến bước bếp được phép theo dõi"
+            );
+        }
+        return order;
+    }
+
+    private boolean isVisibleToKitchen(Order order) {
+        if (order == null || order.getGiaoHang() == null) {
+            return false;
+        }
+        OrderDelivery delivery = order.getGiaoHang();
+        if (delivery.getThoiGianXacNhan() == null) {
+            return false;
+        }
+        return !DELIVERY_SCHEDULED.equals(normalize(delivery.getTrangThaiGiaoHang()));
     }
 
     @Transactional(readOnly = true)

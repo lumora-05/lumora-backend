@@ -92,13 +92,17 @@ public class OrderService {
             "DA_HOAN_THANH"
     );
 
-    private static final Set<String> VALID_ITEM_STATUSES = Set.of(
+    /**
+     * Các trạng thái mà endpoint của BẾP được phép ghi trực tiếp.
+     * DA_PHUC_VU cố ý không nằm trong danh sách này vì chỉ nhân viên phục vụ
+     * mới được xác nhận món đã mang ra bàn qua endpoint /served.
+     */
+    private static final Set<String> KITCHEN_WRITABLE_ITEM_STATUSES = Set.of(
             "CHO_BEP",
             "DANG_NAU",
             "DANG_CHE_BIEN",
             "HOAN_THANH",
-            "DA_HOAN_THANH",
-            "DA_PHUC_VU"
+            "DA_HOAN_THANH"
     );
 
     private static final String ITEM_CANCELLATION_PENDING = "CHO_DUYET";
@@ -1101,10 +1105,10 @@ public class OrderService {
         Order order = findLockedOrderByItem(itemId);
         OrderItem item = findItemInOrder(itemId, order);
         String orderStatus = normalizeStatus(order.getTrangThai());
-        if ("CHO_XAC_NHAN".equals(orderStatus)) {
+        if (isHiddenFromKitchen(order)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Đơn hàng chưa được nhân viên phục vụ xác nhận"
+                    "Đơn hàng chưa đến bước bếp được phép xử lý"
             );
         }
         if (Set.of("CHO_TAI_XE_NHAN", "CHO_BAN_GIAO", "DANG_GIAO", "CHO_DOI_SOAT", "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY").contains(orderStatus)) {
@@ -1113,8 +1117,11 @@ public class OrderService {
 
         String oldItemStatus = normalizeStatus(item.getTrangThaiMon());
         String newItemStatus = normalizeStatus(request.trangThaiMon());
-        if (!VALID_ITEM_STATUSES.contains(newItemStatus)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái món không hợp lệ: " + newItemStatus);
+        if (!KITCHEN_WRITABLE_ITEM_STATUSES.contains(newItemStatus)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Bếp không được phép cập nhật món sang trạng thái: " + newItemStatus
+            );
         }
         if (ITEM_CANCELLATION_HOLD_STATUS.equals(oldItemStatus)) {
             throw new ResponseStatusException(
@@ -1495,39 +1502,57 @@ public class OrderService {
     }
 
     private void validateItemTransition(String oldStatus, String newStatus) {
-        if (oldStatus.equals(newStatus)) {
+        String oldValue = normalizeStatus(oldStatus);
+        String newValue = normalizeStatus(newStatus);
+        if (oldValue.equals(newValue)) {
             return;
         }
-        if ("DA_HUY".equals(oldStatus)) {
+        if ("DA_HUY".equals(oldValue)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Món đã hủy, không thể cập nhật trạng thái");
         }
-        if ("DA_PHUC_VU".equals(oldStatus)) {
+        if ("DA_PHUC_VU".equals(oldValue)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Món đã phục vụ ra bàn, bếp không thể hoàn tác trạng thái");
         }
 
-        // Cho phép bếp hoàn tác khi thao tác nhầm trong phạm vi an toàn:
-        // DANG_CHE_BIEN/DANG_NAU -> CHO_BEP và HOAN_THANH/DA_HOAN_THANH -> DANG_CHE_BIEN/DANG_NAU.
-        if (isKitchenUndoTransition(oldStatus, newStatus)) {
-            return;
+        // Luồng chuẩn của bếp: CHO_BEP -> DANG_NAU/DANG_CHE_BIEN -> HOAN_THANH/DA_HOAN_THANH.
+        // Không cho bỏ qua bước chế biến và không cho bếp tự xác nhận DA_PHUC_VU.
+        if ("CHO_BEP".equals(oldValue)) {
+            if (isCookingItemStatus(newValue)) {
+                return;
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Món chờ bếp chỉ có thể chuyển sang trạng thái đang chế biến"
+            );
         }
 
-        if (isCompletedItemStatus(oldStatus) && !"DA_PHUC_VU".equals(newStatus)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Món đã hoàn thành, chỉ có thể hoàn tác về trạng thái đang chế biến");
+        if (isCookingItemStatus(oldValue)) {
+            if (isReadyForServiceStatus(newValue) || "CHO_BEP".equals(newValue)) {
+                return;
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Món đang chế biến chỉ có thể hoàn tất hoặc hoàn tác về chờ chế biến"
+            );
         }
-        if (isCookingItemStatus(oldStatus)
-                && !(isCompletedItemStatus(newStatus) || "DA_HUY".equals(newStatus))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Món đang chế biến chỉ có thể hoàn tất hoặc hoàn tác về chờ chế biến");
+
+        // Cho phép hoàn tác món vừa hoàn thành về trạng thái đang chế biến khi bếp thao tác nhầm.
+        if (isReadyForServiceStatus(oldValue)) {
+            if (isCookingItemStatus(newValue)) {
+                return;
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Món đã hoàn thành chỉ có thể hoàn tác về trạng thái đang chế biến"
+            );
         }
+
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Không thể chuyển trạng thái món từ " + oldValue + " sang " + newValue
+        );
     }
 
-    private boolean isKitchenUndoTransition(String oldStatus, String newStatus) {
-        String oldValue = normalizeStatus(oldStatus);
-        String newValue = normalizeStatus(newStatus);
-        if (isCookingItemStatus(oldValue) && "CHO_BEP".equals(newValue)) {
-            return true;
-        }
-        return isReadyForServiceStatus(oldValue) && isCookingItemStatus(newValue);
-    }
 
     private boolean isCookingItemStatus(String status) {
         String value = normalizeStatus(status);
