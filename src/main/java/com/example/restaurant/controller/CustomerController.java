@@ -41,17 +41,9 @@ public class CustomerController {
         this.promotionService = promotionService;
     }
 
-    @GetMapping("/tables/{tableId}")
-    public ResponseEntity<ApiResponse<CustomerTableResponse>> tableMenu(@PathVariable Integer tableId) {
-        CustomerTableResponse response = new CustomerTableResponse(
-                tableService.findCustomerAccessibleTable(tableId),
-                categoryService.findActive(),
-                menuService.findActiveFoods()
-        );
-        return ResponseEntity.ok(ApiResponse.success("Lấy thông tin bàn và thực đơn cho khách hàng thành công", response));
-    }
-
-    /** API mới: xác định bàn bằng QR token thay vì mã bàn có thể đoán. */
+    /**
+     * Khách tại bàn chỉ truy cập thông tin bàn bằng QR token, không hỗ trợ truy cập theo tableId.
+     */
     @GetMapping("/qr/{qrToken}")
     public ResponseEntity<ApiResponse<CustomerTableResponse>> tableMenuByQrToken(@PathVariable String qrToken) {
         CustomerTableResponse response = new CustomerTableResponse(
@@ -60,29 +52,6 @@ public class CustomerController {
                 menuService.findActiveFoods()
         );
         return ResponseEntity.ok(ApiResponse.success("Lấy thông tin bàn và thực đơn từ mã QR thành công", response));
-    }
-
-    /**
-     * Thực đơn phân trang dành cho khách hàng.
-     * API thông tin bàn cũ vẫn được giữ nguyên để tương thích với frontend hiện tại.
-     */
-    @GetMapping("/tables/{tableId}/menu")
-    public ResponseEntity<ApiResponse<PageResponse<Food>>> pagedTableMenu(
-            @PathVariable Integer tableId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "12") int size,
-            @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) Integer categoryId) {
-        // Bảo đảm QR/bàn hợp lệ và đang cho phép khách truy cập trước khi trả thực đơn.
-        tableService.findCustomerAccessibleTable(tableId);
-
-        PageResponse<Food> result = PageResponse.from(
-                menuService.findCustomerPage(page, size, keyword, categoryId)
-        );
-        return ResponseEntity.ok(ApiResponse.success(
-                "Lấy thực đơn phân trang cho khách hàng thành công",
-                result
-        ));
     }
 
     @GetMapping("/qr/{qrToken}/menu")
@@ -175,33 +144,12 @@ public class CustomerController {
         ));
     }
 
-    /** Đơn đang mở hiện tại của bàn, dùng khi khách tải lại trang hoặc mở lại trình duyệt. */
-    @GetMapping("/tables/{tableId}/orders/current")
-    public ResponseEntity<ApiResponse<Order>> currentOrder(@PathVariable Integer tableId) {
-        return ResponseEntity.ok(ApiResponse.success(
-                "Lấy đơn hàng đang phục vụ của bàn thành công",
-                orderService.findCurrentOrderByTable(tableId)
-        ));
-    }
-
     @GetMapping("/qr/{qrToken}/orders/current")
     public ResponseEntity<ApiResponse<Order>> currentOrderByQrToken(@PathVariable String qrToken) {
         Integer tableId = tableService.findCustomerAccessibleTableByToken(qrToken).getMaBan();
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy đơn hàng đang phục vụ từ mã QR thành công",
                 orderService.findCurrentOrderByTable(tableId)
-        ));
-    }
-
-    /**
-     * Danh sách đơn còn mở của bàn. Sau nâng cấp thông thường chỉ có tối đa một đơn;
-     * danh sách vẫn được giữ để tương thích dữ liệu cũ có thể đã phát sinh đơn trùng.
-     */
-    @GetMapping("/tables/{tableId}/orders")
-    public ResponseEntity<ApiResponse<List<Order>>> openOrders(@PathVariable Integer tableId) {
-        return ResponseEntity.ok(ApiResponse.success(
-                "Lấy đơn hàng đang phục vụ của bàn thành công",
-                orderService.findOpenOrdersByTable(tableId)
         ));
     }
 
