@@ -28,6 +28,21 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Integer> {
 
     List<OrderItem> findByTrangThaiHuyOrderByThoiGianYeuCauHuyDesc(String trangThaiHuy);
 
+    @Query("""
+            select coalesce(sum(i.soLuong), 0)
+            from OrderItem i
+            where upper(i.trangThaiMon) in :readyStatuses
+              and i.soLuong > 0
+              and (i.trangThaiHuy is null or upper(i.trangThaiHuy) = 'TU_CHOI')
+              and i.donHang.banAn is not null
+              and upper(coalesce(i.donHang.loaiDon, 'TAI_BAN')) <> 'GIAO_HANG'
+              and upper(coalesce(i.donHang.trangThai, '')) not in :excludedOrderStatuses
+              and lower(coalesce(i.donHang.banAn.khuVuc, 'Khu vực chung')) in :areaKeys
+            """)
+    Long sumReadyQuantityForWaiterAreas(@Param("readyStatuses") java.util.Collection<String> readyStatuses,
+                                        @Param("excludedOrderStatuses") java.util.Collection<String> excludedOrderStatuses,
+                                        @Param("areaKeys") java.util.Collection<String> areaKeys);
+
     boolean existsByMonAn_MaMonAn(Integer maMonAn);
 
     @Query("""

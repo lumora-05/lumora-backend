@@ -81,4 +81,56 @@ public class FirebasePushNotificationService {
             log.error("Không thể gửi FCM push cho kênh {}", normalizedChannel, ex);
         }
     }
+    /**
+     * Gửi push đúng cho một nhân viên trong kênh đã đăng ký. Dùng cho nhắc việc
+     * có phạm vi cá nhân như món chờ phục vụ theo khu vực được phân công.
+     */
+    public void sendToEmployeeChannel(Integer employeeId,
+                                      String channel,
+                                      String title,
+                                      String body,
+                                      String url,
+                                      String tag,
+                                      boolean urgent) {
+        if (!isEnabled() || employeeId == null) return;
+
+        String normalizedChannel = channel == null ? "" : channel.trim().toUpperCase(Locale.ROOT);
+        List<String> fids = repository
+                .findByChannelAndActiveTrueAndEmployee_MaNhanVien(normalizedChannel, employeeId)
+                .stream()
+                .map(PushDeviceRegistration::getFirebaseInstallationId)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .limit(500)
+                .toList();
+        if (fids.isEmpty()) return;
+
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("title", StringUtils.hasText(title) ? title : "LUMORA");
+        data.put("body", StringUtils.hasText(body) ? body : "Có công việc mới đang chờ xử lý.");
+        data.put("url", StringUtils.hasText(url) ? url : "/");
+        data.put("tag", StringUtils.hasText(tag) ? tag : "lumora-staff-push");
+        data.put("channel", normalizedChannel);
+        data.put("urgent", Boolean.toString(urgent));
+
+        MulticastMessage message = MulticastMessage.builder()
+                .putAllData(data)
+                .addAllFids(fids)
+                .build();
+
+        try {
+            FirebaseApp app = firebaseAppProvider.getIfAvailable();
+            if (app == null) return;
+            BatchResponse response = FirebaseMessaging.getInstance(app).sendEachForMulticast(message);
+            if (response.getFailureCount() > 0) {
+                log.warn("FCM gửi kênh {} cho nhân viên {}: thành công {}, thất bại {}",
+                        normalizedChannel, employeeId, response.getSuccessCount(), response.getFailureCount());
+            }
+        } catch (FirebaseMessagingException | RuntimeException ex) {
+            // Push là kênh bổ trợ; lỗi FCM tuyệt đối không được rollback nghiệp vụ nhà hàng.
+            log.error("Không thể gửi FCM push cho kênh {} của nhân viên {}",
+                    normalizedChannel, employeeId, ex);
+        }
+    }
+
 }
