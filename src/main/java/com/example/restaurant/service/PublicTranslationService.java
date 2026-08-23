@@ -158,7 +158,6 @@ public class PublicTranslationService {
                     "text", Map.of("type", "STRING")
             ));
             itemSchema.put("required", List.of("key", "text"));
-            itemSchema.put("additionalProperties", false);
 
             Map<String, Object> schema = new LinkedHashMap<>();
             schema.put("type", "OBJECT");
@@ -166,7 +165,6 @@ public class PublicTranslationService {
                     "translations", Map.of("type", "ARRAY", "items", itemSchema)
             ));
             schema.put("required", List.of("translations"));
-            schema.put("additionalProperties", false);
 
             String prompt = SYSTEM_PROMPT
                     + "\nTarget language: " + targetLanguage
