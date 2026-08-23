@@ -118,9 +118,7 @@ public class CategoryService {
 
     private void apply(Category category, CategoryRequest request) {
         category.setTenDanhMuc(request.tenDanhMuc().trim());
-        category.setTenDanhMucEn(trimToNull(request.tenDanhMucEn()));
         category.setMoTa(trimToNull(request.moTa()));
-        category.setMoTaEn(trimToNull(request.moTaEn()));
         if (request.trangThai() != null) {
             category.setTrangThai(request.trangThai());
         }

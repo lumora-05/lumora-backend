@@ -274,10 +274,8 @@ public class MenuService {
         }
         food.setDanhMuc(category);
         food.setTenMonAn(request.tenMonAn().trim());
-        food.setTenMonAnEn(trimToNull(request.tenMonAnEn()));
         food.setGia(request.gia());
         food.setMoTa(trimToNull(request.moTa()));
-        food.setMoTaEn(trimToNull(request.moTaEn()));
         food.setHinhAnh(request.hinhAnh());
         if (request.trangThai() != null) {
             food.setTrangThai(request.trangThai());
