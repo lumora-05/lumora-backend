@@ -1,6 +1,6 @@
 package com.example.restaurant.service;
 
-import com.example.restaurant.config.ChatbotAiProperties;
+import com.example.restaurant.config.TranslationAiProperties;
 import com.example.restaurant.dto.translation.PublicMenuTranslationResponse;
 import com.example.restaurant.entity.Category;
 import com.example.restaurant.entity.Food;
@@ -10,8 +10,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -44,23 +42,20 @@ public class PublicTranslationService {
             Return exactly one result for each supplied key and do not change any key.
             """;
 
-    private final ChatbotAiProperties aiProperties;
+    private final TranslationAiProperties aiProperties;
     private final ObjectMapper objectMapper;
     private final FoodRepository foodRepository;
     private final CategoryRepository categoryRepository;
     private final ConcurrentHashMap<String, String> cache = new ConcurrentHashMap<>();
-    private final boolean enabled;
 
-    public PublicTranslationService(ChatbotAiProperties aiProperties,
+    public PublicTranslationService(TranslationAiProperties aiProperties,
                                     ObjectMapper objectMapper,
                                     FoodRepository foodRepository,
-                                    CategoryRepository categoryRepository,
-                                    @Value("${app.translation.ai.enabled:true}") boolean enabled) {
+                                    CategoryRepository categoryRepository) {
         this.aiProperties = aiProperties;
         this.objectMapper = objectMapper;
         this.foodRepository = foodRepository;
         this.categoryRepository = categoryRepository;
-        this.enabled = enabled;
     }
 
     public PublicMenuTranslationResponse translateMenu(String requestedLanguage) {
@@ -128,7 +123,7 @@ public class PublicTranslationService {
             }
         }
 
-        if (isReady()) {
+        if (aiProperties.isReady()) {
             for (int start = 0; start < missing.size(); start += AI_BATCH_SIZE) {
                 List<TranslationUnit> batch = missing.subList(start, Math.min(start + AI_BATCH_SIZE, missing.size()));
                 Map<String, String> translated = translateBatch(batch, targetLanguage);
@@ -139,6 +134,8 @@ public class PublicTranslationService {
                     result.put(unit.key(), value);
                 }
             }
+        } else if (!missing.isEmpty()) {
+            log.warn("Public menu translation is not ready. Check GEMINI_API_KEY and translation configuration.");
         }
 
         return result;
@@ -155,41 +152,44 @@ public class PublicTranslationService {
             )).toList());
 
             Map<String, Object> itemSchema = new LinkedHashMap<>();
-            itemSchema.put("type", "object");
+            itemSchema.put("type", "OBJECT");
             itemSchema.put("properties", Map.of(
-                    "key", Map.of("type", "string"),
-                    "text", Map.of("type", "string")
+                    "key", Map.of("type", "STRING"),
+                    "text", Map.of("type", "STRING")
             ));
             itemSchema.put("required", List.of("key", "text"));
             itemSchema.put("additionalProperties", false);
 
             Map<String, Object> schema = new LinkedHashMap<>();
-            schema.put("type", "object");
+            schema.put("type", "OBJECT");
             schema.put("properties", Map.of(
-                    "translations", Map.of("type", "array", "items", itemSchema)
+                    "translations", Map.of("type", "ARRAY", "items", itemSchema)
             ));
             schema.put("required", List.of("translations"));
             schema.put("additionalProperties", false);
 
-            Map<String, Object> format = new LinkedHashMap<>();
-            format.put("type", "json_schema");
-            format.put("name", "lumora_public_menu_translation");
-            format.put("strict", true);
-            format.put("schema", schema);
+            String prompt = SYSTEM_PROMPT
+                    + "\nTarget language: " + targetLanguage
+                    + "\nInput JSON:\n" + objectMapper.writeValueAsString(context);
+
+            Map<String, Object> generationConfig = new LinkedHashMap<>();
+            generationConfig.put("temperature", 0.1);
+            generationConfig.put("maxOutputTokens", Math.max(2048, Math.min(8192, items.size() * 220)));
+            generationConfig.put("responseMimeType", "application/json");
+            generationConfig.put("responseSchema", schema);
 
             Map<String, Object> requestBody = new LinkedHashMap<>();
-            requestBody.put("model", aiProperties.getModel());
-            requestBody.put("store", false);
-            requestBody.put("input", List.of(
-                    Map.of("role", "system", "content", SYSTEM_PROMPT),
-                    Map.of("role", "user", "content", objectMapper.writeValueAsString(context))
+            requestBody.put("contents", List.of(
+                    Map.of(
+                            "role", "user",
+                            "parts", List.of(Map.of("text", prompt))
+                    )
             ));
-            requestBody.put("max_output_tokens", Math.max(1000, Math.min(5000, items.size() * 180)));
-            requestBody.put("text", Map.of("format", format));
+            requestBody.put("generationConfig", generationConfig);
 
             String responseBody = createClient()
                     .post()
-                    .uri("/responses")
+                    .uri("/models/{model}:generateContent", aiProperties.getModel().trim())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(requestBody)
                     .retrieve()
@@ -198,12 +198,12 @@ public class PublicTranslationService {
             if (!StringUtils.hasText(responseBody)) return Map.of();
             return parseTranslations(responseBody, items);
         } catch (RestClientResponseException exception) {
-            log.warn("Public menu translation request failed with status {}: {}",
+            log.warn("Gemini public menu translation failed with status {}: {}",
                     exception.getStatusCode().value(), compact(exception.getResponseBodyAsString()));
         } catch (ResourceAccessException exception) {
-            log.warn("Public menu translation request timed out or could not connect: {}", exception.getMessage());
+            log.warn("Gemini public menu translation timed out or could not connect: {}", exception.getMessage());
         } catch (Exception exception) {
-            log.warn("Public menu translation failed: {}", exception.getMessage());
+            log.warn("Gemini public menu translation failed: {}", exception.getMessage());
         }
         return Map.of();
     }
@@ -211,28 +211,32 @@ public class PublicTranslationService {
     private Map<String, String> parseTranslations(String responseBody,
                                                   List<TranslationUnit> requestedItems) throws Exception {
         JsonNode root = objectMapper.readTree(responseBody);
-        if ("incomplete".equalsIgnoreCase(root.path("status").asText())) return Map.of();
+        JsonNode candidates = root.path("candidates");
+        if (!candidates.isArray() || candidates.isEmpty()) {
+            log.warn("Gemini translation returned no candidates: {}", compact(responseBody));
+            return Map.of();
+        }
 
-        String outputText = null;
-        JsonNode output = root.path("output");
-        if (output.isArray()) {
-            outer:
-            for (JsonNode outputItem : output) {
-                JsonNode content = outputItem.path("content");
-                if (!content.isArray()) continue;
-                for (JsonNode contentItem : content) {
-                    if ("output_text".equals(contentItem.path("type").asText()) && contentItem.hasNonNull("text")) {
-                        outputText = contentItem.path("text").asText();
-                        break outer;
-                    }
+        JsonNode candidate = candidates.get(0);
+        String finishReason = candidate.path("finishReason").asText();
+        if (StringUtils.hasText(finishReason) && !"STOP".equalsIgnoreCase(finishReason)) {
+            log.warn("Gemini translation ended with finishReason={}", finishReason);
+        }
+
+        StringBuilder outputText = new StringBuilder();
+        JsonNode parts = candidate.path("content").path("parts");
+        if (parts.isArray()) {
+            for (JsonNode part : parts) {
+                if (part.hasNonNull("text")) {
+                    outputText.append(part.path("text").asText());
                 }
             }
         }
-        if (!StringUtils.hasText(outputText)) return Map.of();
+        if (!StringUtils.hasText(outputText.toString())) return Map.of();
 
         Set<String> allowedKeys = requestedItems.stream().map(TranslationUnit::key)
                 .collect(java.util.stream.Collectors.toSet());
-        JsonNode translations = objectMapper.readTree(outputText).path("translations");
+        JsonNode translations = objectMapper.readTree(outputText.toString()).path("translations");
         if (!translations.isArray()) return Map.of();
 
         Map<String, String> result = new LinkedHashMap<>();
@@ -253,25 +257,21 @@ public class PublicTranslationService {
         requestFactory.setReadTimeout((int) timeout.toMillis());
 
         String baseUrl = aiProperties.getBaseUrl();
-        if (!StringUtils.hasText(baseUrl)) baseUrl = "https://api.openai.com/v1";
+        if (!StringUtils.hasText(baseUrl)) {
+            baseUrl = "https://generativelanguage.googleapis.com/v1beta";
+        }
         baseUrl = baseUrl.replaceAll("/+$", "");
 
         return RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(requestFactory)
-                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + aiProperties.getApiKey().trim())
-                .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+                .defaultHeader("x-goog-api-key", aiProperties.getApiKey().trim())
+                .defaultHeader("Accept", MediaType.APPLICATION_JSON_VALUE)
                 .build();
     }
 
     private void addUnit(List<TranslationUnit> units, String key, String kind, String text) {
         if (StringUtils.hasText(text)) units.add(new TranslationUnit(key, kind, text.trim()));
-    }
-
-    private boolean isReady() {
-        return enabled
-                && StringUtils.hasText(aiProperties.getApiKey())
-                && StringUtils.hasText(aiProperties.getModel());
     }
 
     private String normalizeLanguage(String language) {
