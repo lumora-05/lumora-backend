@@ -16,7 +16,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/reservations")
-@PreAuthorize("hasAnyRole('ADMIN','WAITER')")
+@PreAuthorize("hasAnyRole('ADMIN','CASHIER','WAITER')")
 public class ReservationController {
     private final ReservationService reservationService;
     private final ReservationPreorderService reservationPreorderService;
@@ -39,12 +39,12 @@ public class ReservationController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size,
             Authentication authentication) {
-        boolean admin = hasRole(authentication, "ROLE_ADMIN");
+        boolean unrestricted = hasFullReservationAccess(authentication);
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy danh sách đặt bàn thành công",
                 reservationService.findAll(
                         status, from, to, keyword, area, page, size,
-                        authentication.getName(), admin
+                        authentication.getName(), unrestricted
                 )
         ));
     }
@@ -55,7 +55,7 @@ public class ReservationController {
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy chi tiết đặt bàn thành công",
-                reservationService.findDetail(id, authentication.getName(), hasRole(authentication, "ROLE_ADMIN"))
+                reservationService.findDetail(id, authentication.getName(), hasFullReservationAccess(authentication))
         ));
     }
 
@@ -72,34 +72,37 @@ public class ReservationController {
                 "Lấy danh sách bàn khả dụng thành công",
                 reservationService.availableTables(
                         arrival, partySize, area, durationMinutes, excludeReservationId,
-                        authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
+                        authentication.getName(), hasFullReservationAccess(authentication)
                 )
         ));
     }
 
     @PostMapping("/{id}/confirm")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<ReservationResponse>> confirm(
             @PathVariable Integer id,
             @Valid @RequestBody ReservationConfirmRequest request,
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Xác nhận đặt bàn thành công",
-                reservationService.confirm(id, request, authentication.getName(), hasRole(authentication, "ROLE_ADMIN"))
+                reservationService.confirm(id, request, authentication.getName(), hasFullReservationAccess(authentication))
         ));
     }
 
     @PostMapping("/{id}/reject")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<ReservationResponse>> reject(
             @PathVariable Integer id,
             @Valid @RequestBody ReservationCancelRequest request,
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Từ chối đặt bàn thành công",
-                reservationService.reject(id, request, authentication.getName(), hasRole(authentication, "ROLE_ADMIN"))
+                reservationService.reject(id, request, authentication.getName(), hasFullReservationAccess(authentication))
         ));
     }
 
     @PostMapping("/{id}/check-in")
+    @PreAuthorize("hasAnyRole('ADMIN','WAITER')")
     public ResponseEntity<ApiResponse<ReservationResponse>> checkIn(
             @PathVariable Integer id,
             Authentication authentication) {
@@ -110,6 +113,7 @@ public class ReservationController {
     }
 
     @PostMapping("/{id}/assign-table")
+    @PreAuthorize("hasAnyRole('ADMIN','WAITER')")
     public ResponseEntity<ApiResponse<ReservationResponse>> assignTable(
             @PathVariable Integer id,
             @Valid @RequestBody ReservationAssignTableRequest request,
@@ -121,23 +125,25 @@ public class ReservationController {
     }
 
     @PostMapping("/{id}/no-show")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<ReservationResponse>> noShow(
             @PathVariable Integer id,
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Đánh dấu khách không đến thành công",
-                reservationService.markNoShow(id, authentication.getName(), hasRole(authentication, "ROLE_ADMIN"))
+                reservationService.markNoShow(id, authentication.getName(), hasFullReservationAccess(authentication))
         ));
     }
 
     @PostMapping("/{id}/cancel")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<ReservationResponse>> cancel(
             @PathVariable Integer id,
             @Valid @RequestBody ReservationCancelRequest request,
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Hủy đặt bàn thành công",
-                reservationService.cancelByStaff(id, request, authentication.getName(), hasRole(authentication, "ROLE_ADMIN"))
+                reservationService.cancelByStaff(id, request, authentication.getName(), hasFullReservationAccess(authentication))
         ));
     }
 
@@ -149,12 +155,13 @@ public class ReservationController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy thực đơn đặt trước thành công",
                 reservationPreorderService.findForStaff(
-                        id, authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
+                        id, authentication.getName(), hasFullReservationAccess(authentication)
                 )
         ));
     }
 
     @PostMapping("/{id}/preorder/confirm")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<ReservationPreorderResponse>> confirmPreorder(
             @PathVariable Integer id,
             @Valid @RequestBody(required = false) ReservationPreorderConfirmRequest request,
@@ -162,12 +169,13 @@ public class ReservationController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Xác nhận thực đơn đặt trước thành công",
                 reservationPreorderService.confirmByStaff(
-                        id, request, authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
+                        id, request, authentication.getName(), hasFullReservationAccess(authentication)
                 )
         ));
     }
 
     @PostMapping("/{id}/preorder/reject")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<ReservationPreorderResponse>> rejectPreorder(
             @PathVariable Integer id,
             @Valid @RequestBody ReservationCancelRequest request,
@@ -175,12 +183,13 @@ public class ReservationController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Từ chối thực đơn đặt trước thành công",
                 reservationPreorderService.rejectByStaff(
-                        id, request, authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
+                        id, request, authentication.getName(), hasFullReservationAccess(authentication)
                 )
         ));
     }
 
     @PostMapping("/{id}/preorder/send-to-kitchen")
+    @PreAuthorize("hasAnyRole('ADMIN','WAITER')")
     public ResponseEntity<ApiResponse<ReservationPreorderResponse>> sendPreorderToKitchen(
             @PathVariable Integer id,
             Authentication authentication) {
@@ -190,6 +199,10 @@ public class ReservationController {
                         id, authentication.getName(), hasRole(authentication, "ROLE_ADMIN")
                 )
         ));
+    }
+
+    private boolean hasFullReservationAccess(Authentication authentication) {
+        return hasRole(authentication, "ROLE_ADMIN") || hasRole(authentication, "ROLE_CASHIER");
     }
 
     private boolean hasRole(Authentication authentication, String role) {

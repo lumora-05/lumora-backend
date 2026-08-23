@@ -237,6 +237,7 @@ public class RealtimeNotificationService {
     public void notifyReservationChanged(String type, String message, TableReservation reservation) {
         send("/topic/reservations", type, message, reservation);
         send("/topic/admin/reservations", type, message, reservation);
+        send("/topic/cashier/reservations", type, message, reservation);
         if (reservation != null && reservation.getMaTraCuu() != null
                 && !reservation.getMaTraCuu().isBlank()) {
             send(
