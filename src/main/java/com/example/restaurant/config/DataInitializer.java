@@ -79,6 +79,8 @@ public class DataInitializer {
                 foodRepository.save(traDa);
             }
 
+            backfillPublicMenuEnglish(foodRepository);
+
             if (diningTableRepository.count() == 0) {
                 for (int i = 1; i <= 5; i++) {
                     DiningTable table = new DiningTable();
@@ -149,6 +151,72 @@ public class DataInitializer {
             // Dữ liệu đơn cũ đang chờ bếp cũng được chuyển sang từng suất riêng.
             orderItemUnitUpgradeService.splitLegacyWaitingItems();
         };
+    }
+
+    private void backfillPublicMenuEnglish(FoodRepository foodRepository) {
+        for (Food food : foodRepository.findAll()) {
+            boolean changed = false;
+            String name = food.getTenMonAn();
+
+            if (isBlank(food.getTenMonAnEn())) {
+                String englishName = knownEnglishFoodName(name);
+                if (englishName != null) {
+                    food.setTenMonAnEn(englishName);
+                    changed = true;
+                }
+            }
+
+            if (isBlank(food.getMoTaEn())) {
+                String englishDescription = knownEnglishFoodDescription(name, food.getMoTa());
+                if (englishDescription != null) {
+                    food.setMoTaEn(englishDescription);
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                foodRepository.save(food);
+            }
+        }
+    }
+
+    private String knownEnglishFoodName(String vietnameseName) {
+        if (vietnameseName == null) return null;
+        return switch (vietnameseName.trim()) {
+            case "Cá Hồi Áp Chảo", "Cá hồi áp chảo" -> "Pan-Seared Salmon";
+            case "Mì Ý Bò Bằm" -> "Spaghetti Bolognese";
+            case "Steak Bò Mỹ" -> "U.S. Beef Steak";
+            case "Panna Cotta Dâu Tây" -> "Strawberry Panna Cotta";
+            default -> null;
+        };
+    }
+
+    private String knownEnglishFoodDescription(String vietnameseName, String vietnameseDescription) {
+        if (vietnameseName == null || vietnameseDescription == null) return null;
+        String description = vietnameseDescription.trim();
+        return switch (vietnameseName.trim()) {
+            case "Cá Hồi Áp Chảo", "Cá hồi áp chảo" ->
+                    description.equals("Cá hồi Na Uy áp chảo giòn da, sốt bơ chanh và rau mầm tươi.")
+                            ? "Crispy-skin Norwegian salmon with lemon butter sauce and fresh microgreens."
+                            : null;
+            case "Mì Ý Bò Bằm" ->
+                    description.equals("Mì Ý dai mềm kết hợp sốt cà chua bò bằm đậm đà, phủ phô mai thơm béo.")
+                            ? "Spaghetti tossed with a rich tomato and minced-beef sauce, topped with savory cheese."
+                            : null;
+            case "Steak Bò Mỹ" ->
+                    description.equals("Thịt bò Mỹ áp chảo mềm mọng, đậm vị, dùng kèm rau củ và sốt đặc trưng.")
+                            ? "Juicy pan-seared U.S. beef steak served with vegetables and the restaurant signature sauce."
+                            : null;
+            case "Panna Cotta Dâu Tây" ->
+                    description.equals("Panna cotta mềm mịn, béo nhẹ kết hợp sốt dâu tây chua ngọt tươi mát.")
+                            ? "Smooth, lightly creamy panna cotta with a refreshing sweet-tart strawberry sauce."
+                            : null;
+            default -> null;
+        };
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private void initializeQr(DiningTable table, QrCodeService qrCodeService) {
