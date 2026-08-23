@@ -64,10 +64,12 @@ public class DeliveryOrderController {
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<Order>> confirmVietQr(
             @PathVariable Integer orderId,
-            @Valid @RequestBody DeliveryPaymentConfirmRequest request) {
+            @Valid @RequestBody DeliveryPaymentConfirmRequest request,
+            Principal principal) {
+        String username = principal == null ? null : principal.getName();
         return ResponseEntity.ok(ApiResponse.success(
                 "Đã ghi nhận tiền VietQR; đơn đang chờ nhà hàng xác nhận",
-                deliveryOrderService.confirmVietQrPayment(orderId, request)
+                deliveryOrderService.confirmVietQrPayment(orderId, request, username)
         ));
     }
 
@@ -117,7 +119,7 @@ public class DeliveryOrderController {
         ));
     }
 
-    /** Bước nội bộ sau giao thành công: ghi nhận hóa đơn/kế toán, không hiển thị trong hành trình khách. */
+    /** Xác nhận khách đã nhận tại quầy hoặc xác nhận nhà hàng đã nhận tiền đối soát COD. */
     @PostMapping("/{orderId}/complete")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<Order>> complete(
@@ -125,7 +127,7 @@ public class DeliveryOrderController {
             Principal principal) {
         String username = principal == null ? null : principal.getName();
         return ResponseEntity.ok(ApiResponse.success(
-                "Đã ghi nhận hóa đơn cho đơn giao thành công",
+                "Đã hoàn tất xác nhận nhận món/đối soát COD",
                 deliveryOrderService.complete(orderId, username)
         ));
     }

@@ -20,11 +20,13 @@ import com.example.restaurant.dto.DeliveryTrackingResponse;
 import com.example.restaurant.dto.VietQrResponse;
 import com.example.restaurant.entity.Customer;
 import com.example.restaurant.entity.DeliveryRefund;
+import com.example.restaurant.entity.Employee;
 import com.example.restaurant.entity.Food;
 import com.example.restaurant.entity.Order;
 import com.example.restaurant.entity.OrderDelivery;
 import com.example.restaurant.entity.OrderItem;
 import com.example.restaurant.repository.DeliveryRefundRepository;
+import com.example.restaurant.repository.EmployeeRepository;
 import com.example.restaurant.repository.FoodRepository;
 import com.example.restaurant.repository.InvoiceRepository;
 import com.example.restaurant.repository.OrderDeliveryRepository;
@@ -91,6 +93,7 @@ public class DeliveryOrderService {
     private final OrderRepository orderRepository;
     private final OrderDeliveryRepository deliveryRepository;
     private final DeliveryRefundRepository refundRepository;
+    private final EmployeeRepository employeeRepository;
     private final FoodRepository foodRepository;
     private final InvoiceRepository invoiceRepository;
     private final OrderPricingService orderPricingService;
@@ -108,6 +111,7 @@ public class DeliveryOrderService {
     public DeliveryOrderService(OrderRepository orderRepository,
             OrderDeliveryRepository deliveryRepository,
             DeliveryRefundRepository refundRepository,
+            EmployeeRepository employeeRepository,
             FoodRepository foodRepository,
             InvoiceRepository invoiceRepository,
             OrderPricingService orderPricingService,
@@ -124,6 +128,7 @@ public class DeliveryOrderService {
         this.orderRepository = orderRepository;
         this.deliveryRepository = deliveryRepository;
         this.refundRepository = refundRepository;
+        this.employeeRepository = employeeRepository;
         this.foodRepository = foodRepository;
         this.invoiceRepository = invoiceRepository;
         this.orderPricingService = orderPricingService;
@@ -497,7 +502,7 @@ public class DeliveryOrderService {
     }
 
     @Transactional
-    public Order confirmVietQrPayment(Integer orderId, DeliveryPaymentConfirmRequest request) {
+    public Order confirmVietQrPayment(Integer orderId, DeliveryPaymentConfirmRequest request, String username) {
         Order order = lockDeliveryOrder(orderId);
         OrderDelivery delivery = order.getGiaoHang();
         if (!PAYMENT_VIETQR.equals(normalize(delivery.getPhuongThucThanhToan()))) {
@@ -533,6 +538,9 @@ public class DeliveryOrderService {
         }
 
         if (inventoryError == null) {
+            // Ghi nhớ nhân viên đã xác minh khoản VietQR để hệ thống có thể tự tạo
+            // hóa đơn khi đối tác vận chuyển báo giao thành công.
+            order.setNhanVien(requireDeliveryProcessor(username));
             // Thanh toán xong vẫn phải chờ nhà hàng xác nhận trước khi bếp nhận món.
             delivery.setTrangThaiThanhToan(PAYMENT_PAID);
             delivery.setTrangThaiGiaoHang(DELIVERY_PENDING_CONFIRMATION);
@@ -854,25 +862,28 @@ public class DeliveryOrderService {
     }
 
     /**
-     * Bước nội bộ sau khi đối tác đã báo giao thành công: ghi nhận hóa đơn/kế toán.
-     * Trạng thái này không còn xuất hiện trong hành trình theo dõi của khách.
+     * Với đơn tự đến lấy: xác nhận khách đã nhận món.
+     * Với đơn giao tận nơi COD: xác nhận nhà hàng đã nhận tiền đối soát từ đơn vị vận chuyển.
      */
     @Transactional
     public Order complete(Integer orderId, String username) {
         Order order = lockDeliveryOrder(orderId);
         OrderDelivery delivery = order.getGiaoHang();
         boolean pickup = isPickup(delivery);
+        String paymentMethod = normalize(delivery.getPhuongThucThanhToan());
 
         if (pickup) {
             requireDeliveryStatus(delivery, DELIVERY_WAITING_PICKUP);
         } else {
             requireDeliveryStatus(delivery, DELIVERY_AWAITING_RECONCILIATION);
+            if (!Set.of(PAYMENT_COD, PAYMENT_VIETQR).contains(paymentMethod)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Phương thức thanh toán không hợp lệ");
+            }
             if (!PROVIDER_DELIVERED.equals(normalize(delivery.getTrangThaiDoiTac()))) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Đối tác vận chuyển chưa báo giao thành công");
             }
         }
 
-        String paymentMethod = normalize(delivery.getPhuongThucThanhToan());
         if (PAYMENT_VIETQR.equals(paymentMethod) && !isPaymentSettledForCurrentTotal(order, delivery)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
@@ -890,19 +901,27 @@ public class DeliveryOrderService {
                         : delivery.getThoiGianCapNhatDoiTac());
         order.setTrangThai(DELIVERY_COMPLETED);
         paymentService.completeDeliveryPayment(order, username);
+        // PaymentService ghi nhận hóa đơn, còn trạng thái vận hành của đơn giao hàng
+        // vẫn phải là HOAN_THANH.
+        order.setTrangThai(DELIVERY_COMPLETED);
         Order savedOrder = orderRepository.saveAndFlush(order);
 
+        boolean codReconciled = !pickup && PAYMENT_COD.equals(paymentMethod);
         systemActivityService.record(
-                pickup ? "PICKUP_COMPLETED" : "DELIVERY_COMPLETED",
+                pickup ? "PICKUP_COMPLETED" : (codReconciled ? "DELIVERY_COD_RECONCILED" : "DELIVERY_COMPLETED"),
                 pickup
                         ? "Khách đã nhận đơn tại nhà hàng #DH" + savedOrder.getMaDonHang()
-                        : "Đơn " + delivery.getMaVanChuyen() + " đã được ghi nhận hóa đơn sau giao thành công",
+                        : (codReconciled
+                                ? "Thu ngân đã xác nhận đối soát COD cho đơn " + delivery.getMaVanChuyen()
+                                : "Đã ghi nhận hoàn tất cho đơn VietQR cũ " + delivery.getMaVanChuyen()),
                 savedOrder.getMaDonHang());
         realtimeNotificationService.notifyDeliveryOrderChanged(
-                pickup ? "PICKUP_COMPLETED" : "DELIVERY_COMPLETED",
+                pickup ? "PICKUP_COMPLETED" : (codReconciled ? "DELIVERY_COD_RECONCILED" : "DELIVERY_COMPLETED"),
                 pickup
                         ? "Khách đã nhận món tại nhà hàng"
-                        : "Đã hoàn tất ghi nhận nội bộ cho đơn giao thành công",
+                        : (codReconciled
+                                ? "Đã xác nhận nhà hàng nhận tiền COD từ đơn vị vận chuyển"
+                                : "Đã hoàn tất ghi nhận đơn VietQR cũ"),
                 savedOrder);
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
         return savedOrder;
@@ -971,14 +990,34 @@ public class DeliveryOrderService {
 
         if (PROVIDER_DELIVERED.equals(providerStatus)) {
             // Khách được coi là đã nhận hàng ngay khi đối tác báo giao thành công.
-            // CHO_DOI_SOAT chỉ còn là trạng thái nội bộ để thu ngân ghi nhận hóa đơn.
-            delivery.setTrangThaiGiaoHang(DELIVERY_AWAITING_RECONCILIATION);
             delivery.setThoiGianGiaoThanhCong(delivery.getThoiGianCapNhatDoiTac());
-            if (PAYMENT_COD.equals(normalize(delivery.getPhuongThucThanhToan()))) {
-                delivery.setTrangThaiThanhToan(PAYMENT_PAID);
-                delivery.setSoTienDaThanhToan(money(order.getTongTien()));
+            String paymentMethod = normalize(delivery.getPhuongThucThanhToan());
+            if (PAYMENT_COD.equals(paymentMethod)) {
+                // COD mới chỉ là tiền đã được đơn vị vận chuyển thu hộ. Nhà hàng chưa
+                // được coi là đã nhận tiền cho đến khi Thu ngân xác nhận đối soát.
+                delivery.setTrangThaiGiaoHang(DELIVERY_AWAITING_RECONCILIATION);
+                order.setTrangThai(DELIVERY_AWAITING_RECONCILIATION);
+            } else {
+                // VietQR đã được nhà hàng xác minh trước khi chế biến, nên sau khi
+                // giao thành công không phát sinh bước đối soát COD.
+                if (!isPaymentSettledForCurrentTotal(order, delivery)) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Thanh toán VietQR chưa được ghi nhận đầy đủ");
+                }
+                Employee processor = order.getNhanVien();
+                if (processor == null || !StringUtils.hasText(processor.getTenDangNhap())) {
+                    // Tương thích dữ liệu VietQR cũ chưa lưu người xác minh: giữ lại
+                    // bước ghi nhận nội bộ thay vì làm mất hóa đơn.
+                    delivery.setTrangThaiGiaoHang(DELIVERY_AWAITING_RECONCILIATION);
+                    order.setTrangThai(DELIVERY_AWAITING_RECONCILIATION);
+                } else {
+                    delivery.setTrangThaiGiaoHang(DELIVERY_COMPLETED);
+                    order.setTrangThai(DELIVERY_COMPLETED);
+                    paymentService.completeDeliveryPayment(order, processor);
+                    order.setTrangThai(DELIVERY_COMPLETED);
+                }
             }
-            order.setTrangThai(DELIVERY_AWAITING_RECONCILIATION);
         } else {
             delivery.setTrangThaiGiaoHang(DELIVERY_FAILED);
             delivery.setLyDoGiaoThatBai(StringUtils.hasText(reason) ? reason : "Đơn vị vận chuyển báo giao thất bại");
@@ -993,7 +1032,11 @@ public class DeliveryOrderService {
         realtimeNotificationService.notifyDeliveryOrderChanged(
                 "DELIVERY_PROVIDER_STATUS_UPDATED",
                 PROVIDER_DELIVERED.equals(providerStatus)
-                        ? "Đơn đã giao thành công; phần ghi nhận hóa đơn được xử lý nội bộ"
+                        ? (PAYMENT_COD.equals(normalize(delivery.getPhuongThucThanhToan()))
+                                ? "Đơn đã giao thành công; đang chờ Thu ngân xác nhận đối soát COD"
+                                : (DELIVERY_COMPLETED.equals(normalize(delivery.getTrangThaiGiaoHang()))
+                                        ? "Đơn VietQR đã giao thành công và được hoàn tất tự động"
+                                        : "Đơn VietQR cũ đã giao thành công; đang chờ ghi nhận nội bộ"))
                         : "Đối tác báo giao thất bại",
                 savedOrder);
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
@@ -1656,6 +1699,27 @@ public class DeliveryOrderService {
         delivery.setNguonCapNhatDoiTac(null);
         delivery.setMaSuKienDoiTac(null);
         delivery.setThoiGianCapNhatDoiTac(null);
+    }
+
+    private Employee requireDeliveryProcessor(String username) {
+        String normalizedUsername = trimToNull(username);
+        if (normalizedUsername == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Không xác định được tài khoản đang đăng nhập");
+        }
+        Employee employee = employeeRepository.findByTenDangNhap(normalizedUsername)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.UNAUTHORIZED,
+                        "Không tìm thấy nhân viên từ tài khoản đăng nhập"));
+        String role = employee.getVaiTro() == null
+                ? ""
+                : normalize(employee.getVaiTro().getTenVaiTro()).replace("ROLE_", "");
+        if (!Set.of("CASHIER", "ADMIN").contains(role)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Chỉ Thu ngân hoặc Quản trị viên được xử lý thanh toán đơn online");
+        }
+        if (!"DANG_LAM_VIEC".equals(normalize(employee.getTrangThai()))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nhân viên hiện không còn làm việc");
+        }
+        return employee;
     }
 
     private String normalizeProviderStatus(String value) {

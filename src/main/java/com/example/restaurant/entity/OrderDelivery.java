@@ -143,7 +143,7 @@ public class OrderDelivery {
     @Column(name = "da_canh_bao_cho_xac_nhan", nullable = false)
     private Boolean daCanhBaoChoXacNhan = false;
 
-    /** CHO_THANH_TOAN, CHO_XAC_NHAN, CHO_DEN_GIO, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, CHO_DOI_SOAT (nội bộ), HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
+    /** CHO_THANH_TOAN, CHO_XAC_NHAN, CHO_DEN_GIO, DANG_CHUAN_BI, CHO_TAI_XE_NHAN, DANG_GIAO, CHO_DOI_SOAT (COD chờ đối soát), HOAN_THANH, GIAO_THAT_BAI, DA_HUY. */
     @Column(name = "trang_thai_giao_hang", length = 30, nullable = false)
     private String trangThaiGiaoHang = "CHO_XAC_NHAN";
 

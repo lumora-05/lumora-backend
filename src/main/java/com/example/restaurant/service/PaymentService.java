@@ -222,10 +222,22 @@ public class PaymentService {
      */
     @Transactional
     public Invoice completeDeliveryPayment(Order order, String username) {
+        return completeDeliveryPayment(order, requireCashierOrAdmin(username));
+    }
+
+    /**
+     * Dùng nhân viên đã được xác minh trước đó (ví dụ lúc Thu ngân xác nhận VietQR).
+     * Không kiểm tra lại trạng thái ca làm tại thời điểm webhook giao thành công.
+     */
+    @Transactional
+    public Invoice completeDeliveryPayment(Order order, Employee cashier) {
         if (order == null || order.getMaDonHang() == null
                 || !"GIAO_HANG".equals(normalizeText(order.getLoaiDon()))
                 || order.getGiaoHang() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Đơn giao hàng không hợp lệ");
+        }
+        if (cashier == null || cashier.getMaNhanVien() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Không xác định được nhân viên đã xác minh thanh toán");
         }
 
         Invoice existing = invoiceRepository.findByDonHang_MaDonHang(order.getMaDonHang()).orElse(null);
@@ -235,7 +247,6 @@ public class PaymentService {
         }
 
         orderPricingService.recalculate(order);
-        Employee cashier = requireCashierOrAdmin(username);
         String deliveryPaymentMethod = normalizeText(order.getGiaoHang().getPhuongThucThanhToan());
         String invoiceMethod = "VIETQR".equals(deliveryPaymentMethod)
                 ? METHOD_BANK_TRANSFER
