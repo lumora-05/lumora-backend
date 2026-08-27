@@ -493,20 +493,61 @@ public class ReservationService {
             );
         }
         Employee employee = requireActiveEmployee(username);
-        reservation.setTrangThai(ARRIVED);
         reservation.setNguoiCheckIn(employee);
         reservation.setThoiGianCheckIn(now);
+
+        // Bàn dự kiến đã được giữ khi xác nhận lịch. Khi khách đến, nếu bàn đó
+        // vẫn sẵn sàng thì dùng luôn làm bàn thực tế để tránh bắt phục vụ
+        // thực hiện thêm một bước "xếp bàn" không cần thiết. Nếu bàn có sự
+        // cố/không còn sẵn sàng, vẫn check-in khách và để phục vụ chọn bàn khác.
+        DiningTable autoAssignedTable = null;
+        List<DiningTable> autoAssignedMembers = List.of();
+        if (reservation.getBanDuKien() != null && reservation.getBanDuKien().getMaBan() != null) {
+            try {
+                DiningTable expectedTable = lockTable(reservation.getBanDuKien().getMaBan());
+                validateActualTable(expectedTable, reservation);
+                ensureNoOverlap(expectedTable, reservation);
+
+                reservation.setBanThucTe(expectedTable);
+                reservation.setTrangThai(SEATED);
+                reservation.setNguoiXepBan(employee);
+                reservation.setThoiGianXepBan(now);
+
+                autoAssignedMembers = reservationTableMembers(expectedTable);
+                autoAssignedMembers.forEach(member -> member.setTrangThai("DANG_SU_DUNG"));
+                diningTableRepository.saveAll(autoAssignedMembers);
+                autoAssignedTable = expectedTable;
+            } catch (ResponseStatusException ex) {
+                reservation.setTrangThai(ARRIVED);
+            }
+        } else {
+            reservation.setTrangThai(ARRIVED);
+        }
+
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
                 "RESERVATION_CHECKED_IN",
-                "Khách của lịch " + saved.getMaTraCuu() + " đã đến nhà hàng",
+                autoAssignedTable == null
+                        ? "Khách của lịch " + saved.getMaTraCuu() + " đã đến nhà hàng"
+                        : "Khách của lịch " + saved.getMaTraCuu() + " đã đến và nhận "
+                                + effectiveTableName(autoAssignedTable),
                 saved.getMaDatBan()
         );
         realtimeNotificationService.notifyReservationChanged(
                 "RESERVATION_CHECKED_IN",
-                "Khách đặt bàn đã đến",
+                autoAssignedTable == null
+                        ? "Khách đặt bàn đã đến"
+                        : "Khách đặt bàn đã đến và nhận " + effectiveTableName(autoAssignedTable),
                 saved
         );
+        if (autoAssignedTable != null) {
+            realtimeNotificationService.notifyTableArrangementChanged(
+                    "RESERVATION_TABLE_ASSIGNED",
+                    effectiveTableName(autoAssignedTable) + " đã được nhận bởi khách đặt bàn",
+                    toResponse(saved),
+                    autoAssignedMembers.stream().map(DiningTable::getMaBan).toList()
+            );
+        }
         return toResponse(saved);
     }
 
