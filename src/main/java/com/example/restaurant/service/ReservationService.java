@@ -47,6 +47,7 @@ public class ReservationService {
     private static final String EXPIRED = "HET_HAN";
 
     private static final Set<String> TERMINAL_STATUSES = Set.of(COMPLETED, CANCELLED, REJECTED, NO_SHOW, EXPIRED);
+    private static final Set<String> WAITER_GLOBAL_VISIBILITY_STATUSES = Set.of(CONFIRMED, ARRIVED);
     private static final Set<String> OVERLAP_STATUSES = Set.of(CONFIRMED, ARRIVED, SEATED);
     private static final Set<String> CUSTOMER_ACTIVE_STATUSES = Set.of(PENDING, CONFIRMED, ARRIVED, SEATED);
     private static final Set<String> OPEN_ORDER_STATUSES = Set.of(
@@ -278,14 +279,19 @@ public class ReservationService {
                 if (admin) {
                     return areaMatches;
                 }
-                // Yêu cầu chưa chọn khu vực/bàn được hiển thị cho mọi phục vụ;
-                // khi xác nhận, phục vụ chỉ được chọn bàn thuộc một trong các khu vực của mình.
+                // Lịch đã được thu ngân xác nhận hoặc khách đã đến phải hiển thị cho mọi phục vụ
+                // để bất kỳ nhân viên nào cũng có thể tiếp nhận/check-in. Chỉ sau khi xếp bàn
+                // mới áp dụng khu vực của bàn thực tế cho các nghiệp vụ phục vụ tiếp theo.
+                var globallyVisibleToWaiters = cb.upper(root.<String>get("trangThai"))
+                        .in(WAITER_GLOBAL_VISIBILITY_STATUSES);
+
+                // Yêu cầu chưa chọn khu vực/bàn vẫn được hiển thị cho mọi phục vụ.
                 var unassigned = cb.and(
                         cb.isNull(root.get("khuVucMongMuon")),
                         cb.isNull(root.get("banDuKien")),
                         cb.isNull(root.get("banThucTe"))
                 );
-                return cb.or(areaMatches, unassigned);
+                return cb.or(globallyVisibleToWaiters, areaMatches, unassigned);
             });
         }
 
@@ -1120,6 +1126,9 @@ public class ReservationService {
 
     private void ensureWaiterCanAccessReservation(TableReservation reservation, String username) {
         Employee waiter = requireActiveWaiter(username);
+        if (WAITER_GLOBAL_VISIBILITY_STATUSES.contains(normalizeStatus(reservation.getTrangThai()))) {
+            return;
+        }
         if (reservation.getBanThucTe() == null
                 && reservation.getBanDuKien() == null
                 && !StringUtils.hasText(reservation.getKhuVucMongMuon())) {
