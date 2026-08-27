@@ -16,6 +16,7 @@ import java.util.Optional;
 public interface TableReservationRepository extends JpaRepository<TableReservation, Integer>, JpaSpecificationExecutor<TableReservation> {
     Optional<TableReservation> findByMaTraCuuIgnoreCase(String maTraCuu);
     boolean existsByMaTraCuuIgnoreCase(String maTraCuu);
+    List<TableReservation> findBySoDienThoaiOrderByNgayGioDenDescMaDatBanDesc(String soDienThoai);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from TableReservation r where r.maDatBan = :id")

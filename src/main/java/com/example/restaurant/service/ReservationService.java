@@ -117,6 +117,26 @@ public class ReservationService {
     }
 
     @Transactional(readOnly = true)
+    public List<ReservationResponse> lookupForCustomer(String query) {
+        String normalizedQuery = normalizeRequired(query, "Vui lòng nhập mã đặt bàn hoặc số điện thoại");
+
+        if (normalizedQuery.toUpperCase(Locale.ROOT).startsWith("DB-")) {
+            return List.of(toResponse(findByCode(normalizedQuery)));
+        }
+
+        String phone = normalizePhone(normalizedQuery);
+        List<ReservationResponse> reservations = reservationRepository
+                .findBySoDienThoaiOrderByNgayGioDenDescMaDatBanDesc(phone)
+                .stream()
+                .map(this::toResponse)
+                .toList();
+        if (reservations.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy lịch đặt bàn");
+        }
+        return reservations;
+    }
+
+    @Transactional(readOnly = true)
     public ReservationResponse findForCustomer(String code, String phone) {
         TableReservation reservation = findByCode(code);
         verifyCustomerPhone(reservation, phone);

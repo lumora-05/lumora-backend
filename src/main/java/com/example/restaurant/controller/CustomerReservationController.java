@@ -36,6 +36,15 @@ public class CustomerReservationController {
         ));
     }
 
+    @GetMapping("/lookup")
+    public ResponseEntity<ApiResponse<java.util.List<ReservationResponse>>> lookup(
+            @RequestParam String query) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Tra cứu đặt bàn thành công",
+                reservationService.lookupForCustomer(query)
+        ));
+    }
+
     @GetMapping("/{code}")
     public ResponseEntity<ApiResponse<ReservationResponse>> detail(
             @PathVariable String code,
