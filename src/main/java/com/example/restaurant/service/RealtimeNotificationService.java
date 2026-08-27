@@ -234,6 +234,62 @@ public class RealtimeNotificationService {
         );
     }
 
+    public void notifyReservationPreorderRequiresReapproval(TableReservation reservation) {
+        notifyReservationChanged(
+                "RESERVATION_PREORDER_CHANGED_AFTER_CONFIRMATION",
+                "Khách đã thay đổi món đặt trước và cần được duyệt lại",
+                reservation
+        );
+        send(
+                "/topic/cashier",
+                "RESERVATION_PREORDER_CHANGED_AFTER_CONFIRMATION",
+                "Có thực đơn đặt trước vừa được khách thay đổi sau khi đã duyệt",
+                reservation
+        );
+        String code = reservation == null || reservation.getMaTraCuu() == null
+                ? "lịch đặt bàn"
+                : reservation.getMaTraCuu();
+        firebasePushNotificationService.sendToChannel(
+                "CASHIER",
+                "Khách vừa thay đổi món đặt trước",
+                "Lịch " + code + " đã thay đổi thực đơn sau lần duyệt gần nhất. Vui lòng kiểm tra và duyệt lại.",
+                "/cashier/reservations",
+                "cashier-reservation-preorder-reapproval-" + (reservation == null ? "latest" : reservation.getMaDatBan()),
+                true
+        );
+    }
+
+    public void notifyReservationPreorderReviewRequiredAtCheckIn(TableReservation reservation) {
+        boolean changedAfterConfirmation = reservation != null
+                && Boolean.TRUE.equals(reservation.getCanDuyetLaiDatMonTruoc());
+        String message = changedAfterConfirmation
+                ? "Khách đã đến nhưng thực đơn vừa thay đổi sau lần duyệt; cần duyệt lại trước khi chuyển bếp"
+                : "Khách đã đến nhưng thực đơn đặt trước vẫn chưa được duyệt";
+        send(
+                "/topic/cashier/reservations",
+                "RESERVATION_PREORDER_REVIEW_REQUIRED_AT_CHECKIN",
+                message,
+                reservation
+        );
+        send(
+                "/topic/cashier",
+                "RESERVATION_PREORDER_REVIEW_REQUIRED_AT_CHECKIN",
+                message,
+                reservation
+        );
+        String code = reservation == null || reservation.getMaTraCuu() == null
+                ? "lịch đặt bàn"
+                : reservation.getMaTraCuu();
+        firebasePushNotificationService.sendToChannel(
+                "CASHIER",
+                "Có thực đơn cần duyệt ngay",
+                "Khách của lịch " + code + " đã check-in nhưng thực đơn đặt trước chưa được duyệt xong.",
+                "/cashier/reservations",
+                "cashier-reservation-preorder-checkin-" + (reservation == null ? "latest" : reservation.getMaDatBan()),
+                true
+        );
+    }
+
     public void notifyReservationChanged(String type, String message, TableReservation reservation) {
         send("/topic/reservations", type, message, reservation);
         send("/topic/admin/reservations", type, message, reservation);
@@ -523,6 +579,8 @@ public class RealtimeNotificationService {
         payload.put("thoiGianXacNhanMonTruoc", reservation.getThoiGianXacNhanMonTruoc());
         payload.put("thoiGianDuKienChuyenBep", reservation.getThoiGianDuKienChuyenBep());
         payload.put("thoiGianChuyenBep", reservation.getThoiGianChuyenBep());
+        payload.put("canDuyetLaiDatMonTruoc", Boolean.TRUE.equals(reservation.getCanDuyetLaiDatMonTruoc()));
+        payload.put("thoiGianThayDoiDatMonTruoc", reservation.getThoiGianThayDoiDatMonTruoc());
         return payload;
     }
 

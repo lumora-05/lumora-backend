@@ -9,11 +9,17 @@ ALTER TABLE dat_ban
     ADD COLUMN IF NOT EXISTS thoi_gian_xac_nhan_mon_truoc TIMESTAMP,
     ADD COLUMN IF NOT EXISTS thoi_gian_du_kien_chuyen_bep TIMESTAMP,
     ADD COLUMN IF NOT EXISTS thoi_gian_chuyen_bep TIMESTAMP,
-    ADD COLUMN IF NOT EXISTS nguoi_xac_nhan_mon_truoc INTEGER;
+    ADD COLUMN IF NOT EXISTS nguoi_xac_nhan_mon_truoc INTEGER,
+    ADD COLUMN IF NOT EXISTS can_duyet_lai_dat_mon_truoc BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS thoi_gian_thay_doi_dat_mon_truoc TIMESTAMP;
 
 UPDATE dat_ban
 SET trang_thai_dat_mon_truoc = 'CHUA_DAT'
 WHERE trang_thai_dat_mon_truoc IS NULL OR BTRIM(trang_thai_dat_mon_truoc) = '';
+
+UPDATE dat_ban
+SET can_duyet_lai_dat_mon_truoc = FALSE
+WHERE can_duyet_lai_dat_mon_truoc IS NULL;
 
 DO $$
 BEGIN

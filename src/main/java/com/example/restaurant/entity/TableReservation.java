@@ -120,6 +120,16 @@ public class TableReservation {
     @JoinColumn(name = "nguoi_xac_nhan_mon_truoc")
     private Employee nguoiXacNhanMonTruoc;
 
+    /**
+     * true khi khách đã sửa thực đơn sau lần nhân viên duyệt gần nhất và thay đổi đó
+     * vẫn chưa được nhân viên xem/duyệt lại. Cờ này giúp màn hình thu ngân không bỏ sót.
+     */
+    @Column(name = "can_duyet_lai_dat_mon_truoc")
+    private Boolean canDuyetLaiDatMonTruoc = false;
+
+    @Column(name = "thoi_gian_thay_doi_dat_mon_truoc")
+    private LocalDateTime thoiGianThayDoiDatMonTruoc;
+
     @JsonIgnore
     @OneToMany(mappedBy = "datBan", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("maChiTietDatMonTruoc ASC")
@@ -193,6 +203,10 @@ public class TableReservation {
     public void setThoiGianChuyenBep(LocalDateTime value) { this.thoiGianChuyenBep = value; }
     public Employee getNguoiXacNhanMonTruoc() { return nguoiXacNhanMonTruoc; }
     public void setNguoiXacNhanMonTruoc(Employee value) { this.nguoiXacNhanMonTruoc = value; }
+    public Boolean getCanDuyetLaiDatMonTruoc() { return canDuyetLaiDatMonTruoc; }
+    public void setCanDuyetLaiDatMonTruoc(Boolean value) { this.canDuyetLaiDatMonTruoc = value; }
+    public LocalDateTime getThoiGianThayDoiDatMonTruoc() { return thoiGianThayDoiDatMonTruoc; }
+    public void setThoiGianThayDoiDatMonTruoc(LocalDateTime value) { this.thoiGianThayDoiDatMonTruoc = value; }
     public List<ReservationPreorderItem> getChiTietDatMonTruoc() { return chiTietDatMonTruoc; }
     public void setChiTietDatMonTruoc(List<ReservationPreorderItem> value) {
         this.chiTietDatMonTruoc = value == null ? new ArrayList<>() : value;
@@ -215,6 +229,9 @@ public class TableReservation {
         if (trangThaiDatMonTruoc == null || trangThaiDatMonTruoc.isBlank()) {
             trangThaiDatMonTruoc = "CHUA_DAT";
         }
+        if (canDuyetLaiDatMonTruoc == null) {
+            canDuyetLaiDatMonTruoc = false;
+        }
         if (thoiLuongPhut == null || thoiLuongPhut < 30) {
             thoiLuongPhut = 120;
         }
@@ -228,6 +245,9 @@ public class TableReservation {
         thoiGianCapNhat = LocalDateTime.now();
         if (trangThaiDatMonTruoc == null || trangThaiDatMonTruoc.isBlank()) {
             trangThaiDatMonTruoc = "CHUA_DAT";
+        }
+        if (canDuyetLaiDatMonTruoc == null) {
+            canDuyetLaiDatMonTruoc = false;
         }
         if (ngayGioDen != null && thoiLuongPhut != null) {
             thoiGianKetThucDuKien = ngayGioDen.plusMinutes(thoiLuongPhut);

@@ -16,6 +16,8 @@ public record ReservationPreorderResponse(
         LocalDateTime thoiGianXacNhanMonTruoc,
         LocalDateTime thoiGianDuKienChuyenBep,
         LocalDateTime thoiGianChuyenBep,
+        Boolean canDuyetLaiDatMonTruoc,
+        LocalDateTime thoiGianThayDoiDatMonTruoc,
         Integer maNguoiXacNhanMonTruoc,
         String tenNguoiXacNhanMonTruoc,
         Integer maDonHang,

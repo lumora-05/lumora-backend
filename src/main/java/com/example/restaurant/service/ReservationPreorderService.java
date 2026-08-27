@@ -109,6 +109,16 @@ public class ReservationPreorderService {
             );
         }
 
+        String previousPreorderStatus = defaultPreorderStatus(reservation.getTrangThaiDatMonTruoc());
+        boolean preorderContentChanged = hasPreorderContentChanged(reservation, request);
+        if (!preorderContentChanged
+                && Set.of(PREORDER_PENDING, PREORDER_CONFIRMED).contains(previousPreorderStatus)) {
+            return toResponse(reservation);
+        }
+        boolean requiresReapproval = PREORDER_CONFIRMED.equals(previousPreorderStatus)
+                || Boolean.TRUE.equals(reservation.getCanDuyetLaiDatMonTruoc());
+        LocalDateTime now = LocalDateTime.now();
+
         reservation.getChiTietDatMonTruoc().clear();
         for (ReservationPreorderRequest.Item requestedItem : request.items()) {
             Food food = foodRepository.findById(requestedItem.maMonAn())
@@ -134,23 +144,34 @@ public class ReservationPreorderService {
         reservation.setTrangThaiDatMonTruoc(PREORDER_PENDING);
         reservation.setGhiChuDatMonTruoc(trimToNull(request.ghiChu()));
         reservation.setLyDoTuChoiDatMonTruoc(null);
-        reservation.setThoiGianDatMonTruoc(LocalDateTime.now());
+        reservation.setThoiGianDatMonTruoc(now);
         reservation.setThoiGianXacNhanMonTruoc(null);
         reservation.setThoiGianDuKienChuyenBep(null);
         reservation.setThoiGianChuyenBep(null);
         reservation.setNguoiXacNhanMonTruoc(null);
+        reservation.setCanDuyetLaiDatMonTruoc(requiresReapproval);
+        reservation.setThoiGianThayDoiDatMonTruoc(requiresReapproval ? now : null);
 
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
-        systemActivityService.record(
-                "RESERVATION_PREORDER_SUBMITTED",
-                "Khách đã gửi thực đơn đặt trước cho lịch " + saved.getMaTraCuu(),
-                saved.getMaDatBan()
-        );
-        realtimeNotificationService.notifyReservationChanged(
-                "RESERVATION_PREORDER_SUBMITTED",
-                "Khách đã gửi thực đơn đặt trước",
-                saved
-        );
+        if (requiresReapproval) {
+            systemActivityService.record(
+                    "RESERVATION_PREORDER_CHANGED_AFTER_CONFIRMATION",
+                    "Khách đã thay đổi thực đơn sau khi được duyệt của lịch " + saved.getMaTraCuu(),
+                    saved.getMaDatBan()
+            );
+            realtimeNotificationService.notifyReservationPreorderRequiresReapproval(saved);
+        } else {
+            systemActivityService.record(
+                    "RESERVATION_PREORDER_SUBMITTED",
+                    "Khách đã gửi thực đơn đặt trước cho lịch " + saved.getMaTraCuu(),
+                    saved.getMaDatBan()
+            );
+            realtimeNotificationService.notifyReservationChanged(
+                    "RESERVATION_PREORDER_SUBMITTED",
+                    "Khách đã gửi thực đơn đặt trước",
+                    saved
+            );
+        }
         return toResponse(saved);
     }
 
@@ -173,6 +194,8 @@ public class ReservationPreorderService {
         }
 
         reservation.setTrangThaiDatMonTruoc(PREORDER_CANCELLED);
+        reservation.setCanDuyetLaiDatMonTruoc(false);
+        reservation.setThoiGianThayDoiDatMonTruoc(null);
         reservation.setLyDoTuChoiDatMonTruoc(normalizeRequired(
                 request.reason(),
                 "Lý do hủy món đặt trước không được để trống"
@@ -223,6 +246,8 @@ public class ReservationPreorderService {
         reservation.setThoiGianXacNhanMonTruoc(LocalDateTime.now());
         reservation.setThoiGianDuKienChuyenBep(plannedKitchenTime);
         reservation.setNguoiXacNhanMonTruoc(employee);
+        reservation.setCanDuyetLaiDatMonTruoc(false);
+        reservation.setThoiGianThayDoiDatMonTruoc(null);
         reservation.setLyDoTuChoiDatMonTruoc(null);
         if (request != null && StringUtils.hasText(request.ghiChu())) {
             reservation.setGhiChuDatMonTruoc(mergeNotes(
@@ -256,6 +281,8 @@ public class ReservationPreorderService {
         requirePreorderStatus(reservation, PREORDER_PENDING, "Chỉ có thể từ chối thực đơn đang chờ xác nhận");
 
         reservation.setTrangThaiDatMonTruoc(PREORDER_REJECTED);
+        reservation.setCanDuyetLaiDatMonTruoc(false);
+        reservation.setThoiGianThayDoiDatMonTruoc(null);
         reservation.setLyDoTuChoiDatMonTruoc(normalizeRequired(
                 request.reason(),
                 "Lý do từ chối không được để trống"
@@ -302,6 +329,14 @@ public class ReservationPreorderService {
                 ));
         TableReservation reservation = findByIdForUpdate(reservationId);
         Employee employee = requireActiveEmployee(username);
+        if (PREORDER_PENDING.equals(normalizeStatus(reservation.getTrangThaiDatMonTruoc()))
+                && Boolean.TRUE.equals(reservation.getCanDuyetLaiDatMonTruoc())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Khách đã thay đổi thực đơn sau lần xác nhận gần nhất. "
+                            + "Vui lòng kiểm tra và duyệt lại trước khi chuyển món xuống bếp"
+            );
+        }
         requirePreorderStatus(reservation, PREORDER_CONFIRMED, "Thực đơn đặt trước chưa được xác nhận");
 
         if (!RESERVATION_SEATED.equals(normalizeStatus(reservation.getTrangThai()))
@@ -369,6 +404,8 @@ public class ReservationPreorderService {
         Order savedOrder = orderRepository.saveAndFlush(order);
         reservation.setDonHang(savedOrder);
         reservation.setTrangThaiDatMonTruoc(PREORDER_SENT);
+        reservation.setCanDuyetLaiDatMonTruoc(false);
+        reservation.setThoiGianThayDoiDatMonTruoc(null);
         reservation.setThoiGianChuyenBep(now);
         TableReservation savedReservation = reservationRepository.saveAndFlush(reservation);
 
@@ -509,12 +546,37 @@ public class ReservationPreorderService {
                 reservation.getThoiGianXacNhanMonTruoc(),
                 reservation.getThoiGianDuKienChuyenBep(),
                 reservation.getThoiGianChuyenBep(),
+                Boolean.TRUE.equals(reservation.getCanDuyetLaiDatMonTruoc()),
+                reservation.getThoiGianThayDoiDatMonTruoc(),
                 confirmer == null ? null : confirmer.getMaNhanVien(),
                 confirmer == null ? null : confirmer.getHoTen(),
                 reservation.getDonHang() == null ? null : reservation.getDonHang().getMaDonHang(),
                 money(total),
                 items
         );
+    }
+
+    private boolean hasPreorderContentChanged(TableReservation reservation,
+                                               ReservationPreorderRequest request) {
+        if (!java.util.Objects.equals(
+                trimToNull(reservation.getGhiChuDatMonTruoc()),
+                trimToNull(request.ghiChu())
+        )) {
+            return true;
+        }
+
+        List<String> currentItems = reservation.getChiTietDatMonTruoc().stream()
+                .map(item -> {
+                    Integer foodId = item.getMonAn() == null ? null : item.getMonAn().getMaMonAn();
+                    return String.valueOf(foodId) + "|" + item.getSoLuong() + "|" + trimToNull(item.getGhiChu());
+                })
+                .sorted()
+                .toList();
+        List<String> requestedItems = request.items().stream()
+                .map(item -> item.maMonAn() + "|" + item.soLuong() + "|" + trimToNull(item.ghiChu()))
+                .sorted()
+                .toList();
+        return !currentItems.equals(requestedItems);
     }
 
     private String buildOrderNote(TableReservation reservation) {

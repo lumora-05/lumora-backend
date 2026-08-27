@@ -560,6 +560,10 @@ public class ReservationService {
                         : "Khách đặt bàn đã đến và nhận " + effectiveTableName(autoAssignedTable),
                 saved
         );
+        if ("CHO_XAC_NHAN".equals(normalizeStatus(saved.getTrangThaiDatMonTruoc()))
+                && !saved.getChiTietDatMonTruoc().isEmpty()) {
+            realtimeNotificationService.notifyReservationPreorderReviewRequiredAtCheckIn(saved);
+        }
         if (autoAssignedTable != null) {
             realtimeNotificationService.notifyTableArrangementChanged(
                     "RESERVATION_TABLE_ASSIGNED",
@@ -1328,7 +1332,9 @@ public class ReservationService {
                 reservation.getThoiGianDatMonTruoc(),
                 reservation.getThoiGianXacNhanMonTruoc(),
                 reservation.getThoiGianDuKienChuyenBep(),
-                reservation.getThoiGianChuyenBep()
+                reservation.getThoiGianChuyenBep(),
+                Boolean.TRUE.equals(reservation.getCanDuyetLaiDatMonTruoc()),
+                reservation.getThoiGianThayDoiDatMonTruoc()
         );
     }
 
@@ -1352,6 +1358,8 @@ public class ReservationService {
             return;
         }
         reservation.setTrangThaiDatMonTruoc("DA_HUY");
+        reservation.setCanDuyetLaiDatMonTruoc(false);
+        reservation.setThoiGianThayDoiDatMonTruoc(null);
         reservation.setLyDoTuChoiDatMonTruoc(reason);
         reservation.setThoiGianDuKienChuyenBep(null);
     }

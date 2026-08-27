@@ -39,5 +39,7 @@ public record ReservationResponse(
         LocalDateTime thoiGianDatMonTruoc,
         LocalDateTime thoiGianXacNhanMonTruoc,
         LocalDateTime thoiGianDuKienChuyenBep,
-        LocalDateTime thoiGianChuyenBep
+        LocalDateTime thoiGianChuyenBep,
+        Boolean canDuyetLaiDatMonTruoc,
+        LocalDateTime thoiGianThayDoiDatMonTruoc
 ) {}
