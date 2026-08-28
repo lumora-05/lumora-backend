@@ -2,6 +2,7 @@ package com.example.restaurant.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -69,6 +70,39 @@ public class TableReservation {
 
     @Column(name = "thoi_gian_cap_nhat", nullable = false)
     private LocalDateTime thoiGianCapNhat = LocalDateTime.now();
+
+    @Column(name = "tien_coc", precision = 12, scale = 2, nullable = false)
+    private BigDecimal tienCoc = BigDecimal.ZERO;
+
+    /** CHO_THANH_TOAN, DA_THANH_TOAN, CHO_HOAN, DA_HOAN, MAT_COC, DA_KHAU_TRU, DA_HUY. */
+    @Column(name = "trang_thai_coc", length = 30, nullable = false)
+    private String trangThaiCoc = "CHO_THANH_TOAN";
+
+    @Column(name = "tien_coc_da_khau_tru", precision = 12, scale = 2, nullable = false)
+    private BigDecimal tienCocDaKhauTru = BigDecimal.ZERO;
+
+    @Column(name = "thoi_han_thanh_toan_coc")
+    private LocalDateTime thoiHanThanhToanCoc;
+
+    @Column(name = "thoi_gian_thanh_toan_coc")
+    private LocalDateTime thoiGianThanhToanCoc;
+
+    @Column(name = "ma_giao_dich_coc", length = 100, unique = true)
+    private String maGiaoDichCoc;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "nguoi_xac_nhan_coc")
+    private Employee nguoiXacNhanCoc;
+
+    @Column(name = "thoi_gian_hoan_coc")
+    private LocalDateTime thoiGianHoanCoc;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "nguoi_hoan_coc")
+    private Employee nguoiHoanCoc;
+
+    @Column(name = "ly_do_xu_ly_coc", length = 500)
+    private String lyDoXuLyCoc;
 
     @Column(name = "thoi_gian_xac_nhan")
     private LocalDateTime thoiGianXacNhan;
@@ -173,6 +207,26 @@ public class TableReservation {
     public void setThoiGianTao(LocalDateTime value) { this.thoiGianTao = value; }
     public LocalDateTime getThoiGianCapNhat() { return thoiGianCapNhat; }
     public void setThoiGianCapNhat(LocalDateTime value) { this.thoiGianCapNhat = value; }
+    public BigDecimal getTienCoc() { return tienCoc; }
+    public void setTienCoc(BigDecimal value) { this.tienCoc = value; }
+    public String getTrangThaiCoc() { return trangThaiCoc; }
+    public void setTrangThaiCoc(String value) { this.trangThaiCoc = value; }
+    public BigDecimal getTienCocDaKhauTru() { return tienCocDaKhauTru; }
+    public void setTienCocDaKhauTru(BigDecimal value) { this.tienCocDaKhauTru = value; }
+    public LocalDateTime getThoiHanThanhToanCoc() { return thoiHanThanhToanCoc; }
+    public void setThoiHanThanhToanCoc(LocalDateTime value) { this.thoiHanThanhToanCoc = value; }
+    public LocalDateTime getThoiGianThanhToanCoc() { return thoiGianThanhToanCoc; }
+    public void setThoiGianThanhToanCoc(LocalDateTime value) { this.thoiGianThanhToanCoc = value; }
+    public String getMaGiaoDichCoc() { return maGiaoDichCoc; }
+    public void setMaGiaoDichCoc(String value) { this.maGiaoDichCoc = value; }
+    public Employee getNguoiXacNhanCoc() { return nguoiXacNhanCoc; }
+    public void setNguoiXacNhanCoc(Employee value) { this.nguoiXacNhanCoc = value; }
+    public LocalDateTime getThoiGianHoanCoc() { return thoiGianHoanCoc; }
+    public void setThoiGianHoanCoc(LocalDateTime value) { this.thoiGianHoanCoc = value; }
+    public Employee getNguoiHoanCoc() { return nguoiHoanCoc; }
+    public void setNguoiHoanCoc(Employee value) { this.nguoiHoanCoc = value; }
+    public String getLyDoXuLyCoc() { return lyDoXuLyCoc; }
+    public void setLyDoXuLyCoc(String value) { this.lyDoXuLyCoc = value; }
     public LocalDateTime getThoiGianXacNhan() { return thoiGianXacNhan; }
     public void setThoiGianXacNhan(LocalDateTime value) { this.thoiGianXacNhan = value; }
     public LocalDateTime getThoiGianCheckIn() { return thoiGianCheckIn; }

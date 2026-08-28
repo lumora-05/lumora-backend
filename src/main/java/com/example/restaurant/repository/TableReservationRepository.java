@@ -15,8 +15,25 @@ import java.util.Optional;
 
 public interface TableReservationRepository extends JpaRepository<TableReservation, Integer>, JpaSpecificationExecutor<TableReservation> {
     Optional<TableReservation> findByMaTraCuuIgnoreCase(String maTraCuu);
+    Optional<TableReservation> findByDonHang_MaDonHang(Integer maDonHang);
     boolean existsByMaTraCuuIgnoreCase(String maTraCuu);
     List<TableReservation> findBySoDienThoaiOrderByNgayGioDenDescMaDatBanDesc(String soDienThoai);
+
+    boolean existsByMaGiaoDichCocIgnoreCase(String maGiaoDichCoc);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select r from TableReservation r
+            where r.trangThaiCoc = :depositStatus
+              and r.thoiHanThanhToanCoc is not null
+              and r.thoiHanThanhToanCoc <= :deadline
+              and r.trangThai in :reservationStatuses
+            order by r.thoiHanThanhToanCoc asc, r.maDatBan asc
+            """)
+    List<TableReservation> findExpiredDepositsForUpdate(
+            @Param("depositStatus") String depositStatus,
+            @Param("deadline") LocalDateTime deadline,
+            @Param("reservationStatuses") Collection<String> reservationStatuses);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from TableReservation r where r.maDatBan = :id")

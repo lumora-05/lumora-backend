@@ -73,6 +73,15 @@ public class SystemSetting {
     @Column(name = "reservation_maximum_advance_days")
     private Integer reservationMaximumAdvanceDays;
 
+    @Column(name = "reservation_deposit_amount", precision = 18, scale = 2)
+    private BigDecimal reservationDepositAmount;
+
+    @Column(name = "reservation_deposit_payment_timeout_minutes")
+    private Integer reservationDepositPaymentTimeoutMinutes;
+
+    @Column(name = "reservation_deposit_refund_advance_minutes")
+    private Integer reservationDepositRefundAdvanceMinutes;
+
     // Giao hàng theo quãng đường
     @Column(name = "delivery_tier1_distance_km")
     private Double deliveryTier1DistanceKm;

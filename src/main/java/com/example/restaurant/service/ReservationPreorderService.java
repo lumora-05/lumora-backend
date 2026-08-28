@@ -95,6 +95,12 @@ public class ReservationPreorderService {
         TableReservation reservation = findByCodeForUpdate(code);
         verifyCustomerPhone(reservation, phone);
         ensureCustomerCanEdit(reservation);
+        if (!"DA_THANH_TOAN".equals(normalizeStatus(reservation.getTrangThaiCoc()))) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Vui lòng thanh toán tiền cọc đặt bàn trước khi chọn món đặt trước"
+            );
+        }
 
         if (PREORDER_SENT.equals(normalizeStatus(reservation.getTrangThaiDatMonTruoc()))) {
             throw new ResponseStatusException(

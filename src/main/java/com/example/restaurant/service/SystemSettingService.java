@@ -28,6 +28,9 @@ public class SystemSettingService {
     private static final int DEFAULT_RESERVATION_CHECK_IN_EARLY_MINUTES = 30;
     private static final int DEFAULT_RESERVATION_MINIMUM_ADVANCE_MINUTES = 30;
     private static final int DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS = 60;
+    private static final BigDecimal DEFAULT_RESERVATION_DEPOSIT_AMOUNT = new BigDecimal("100000");
+    private static final int DEFAULT_RESERVATION_DEPOSIT_PAYMENT_TIMEOUT_MINUTES = 10;
+    private static final int DEFAULT_RESERVATION_DEPOSIT_REFUND_ADVANCE_MINUTES = 120;
     private static final BigDecimal DEFAULT_LOYALTY_MONEY_PER_POINT = new BigDecimal("10000");
     private static final BigDecimal DEFAULT_LOYALTY_REDEEM_VALUE = new BigDecimal("1000");
     private static final int DEFAULT_LOYALTY_MINIMUM_REDEEM_POINTS = 20;
@@ -108,6 +111,15 @@ public class SystemSettingService {
         }
         if (request.getReservationMaximumAdvanceDays() != null) {
             setting.setReservationMaximumAdvanceDays(request.getReservationMaximumAdvanceDays());
+        }
+        if (request.getReservationDepositAmount() != null) {
+            setting.setReservationDepositAmount(request.getReservationDepositAmount());
+        }
+        if (request.getReservationDepositPaymentTimeoutMinutes() != null) {
+            setting.setReservationDepositPaymentTimeoutMinutes(request.getReservationDepositPaymentTimeoutMinutes());
+        }
+        if (request.getReservationDepositRefundAdvanceMinutes() != null) {
+            setting.setReservationDepositRefundAdvanceMinutes(request.getReservationDepositRefundAdvanceMinutes());
         }
 
         if (request.getDeliveryTier1DistanceKm() != null) {
@@ -303,6 +315,9 @@ public class SystemSettingService {
         setting.setReservationCheckInEarlyMinutes(DEFAULT_RESERVATION_CHECK_IN_EARLY_MINUTES);
         setting.setReservationMinimumAdvanceMinutes(DEFAULT_RESERVATION_MINIMUM_ADVANCE_MINUTES);
         setting.setReservationMaximumAdvanceDays(DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS);
+        setting.setReservationDepositAmount(DEFAULT_RESERVATION_DEPOSIT_AMOUNT);
+        setting.setReservationDepositPaymentTimeoutMinutes(DEFAULT_RESERVATION_DEPOSIT_PAYMENT_TIMEOUT_MINUTES);
+        setting.setReservationDepositRefundAdvanceMinutes(DEFAULT_RESERVATION_DEPOSIT_REFUND_ADVANCE_MINUTES);
 
         setting.setDeliveryTier1DistanceKm(positiveDoubleOrDefault(vietMapProperties.getTier1DistanceKm(), 3.0d));
         setting.setDeliveryTier2DistanceKm(positiveDoubleOrDefault(vietMapProperties.getTier2DistanceKm(), 6.0d));
@@ -361,6 +376,18 @@ public class SystemSettingService {
         }
         if (setting.getReservationMaximumAdvanceDays() == null) {
             setting.setReservationMaximumAdvanceDays(DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS);
+            changed = true;
+        }
+        if (setting.getReservationDepositAmount() == null || setting.getReservationDepositAmount().signum() <= 0) {
+            setting.setReservationDepositAmount(DEFAULT_RESERVATION_DEPOSIT_AMOUNT);
+            changed = true;
+        }
+        if (setting.getReservationDepositPaymentTimeoutMinutes() == null || setting.getReservationDepositPaymentTimeoutMinutes() <= 0) {
+            setting.setReservationDepositPaymentTimeoutMinutes(DEFAULT_RESERVATION_DEPOSIT_PAYMENT_TIMEOUT_MINUTES);
+            changed = true;
+        }
+        if (setting.getReservationDepositRefundAdvanceMinutes() == null || setting.getReservationDepositRefundAdvanceMinutes() < 0) {
+            setting.setReservationDepositRefundAdvanceMinutes(DEFAULT_RESERVATION_DEPOSIT_REFUND_ADVANCE_MINUTES);
             changed = true;
         }
 
@@ -488,6 +515,15 @@ public class SystemSettingService {
         reservationPolicyProperties.setMaximumAdvanceDays(
                 positiveOrDefault(setting.getReservationMaximumAdvanceDays(), DEFAULT_RESERVATION_MAXIMUM_ADVANCE_DAYS)
         );
+        reservationPolicyProperties.setDepositAmount(
+                nonNegativeMoneyOrDefault(setting.getReservationDepositAmount(), DEFAULT_RESERVATION_DEPOSIT_AMOUNT)
+        );
+        reservationPolicyProperties.setDepositPaymentTimeoutMinutes(
+                positiveOrDefault(setting.getReservationDepositPaymentTimeoutMinutes(), DEFAULT_RESERVATION_DEPOSIT_PAYMENT_TIMEOUT_MINUTES)
+        );
+        reservationPolicyProperties.setDepositRefundAdvanceMinutes(
+                nonNegativeOrDefault(setting.getReservationDepositRefundAdvanceMinutes(), DEFAULT_RESERVATION_DEPOSIT_REFUND_ADVANCE_MINUTES)
+        );
 
         // Giao hàng theo quãng đường
         vietMapProperties.setTier1DistanceKm(
@@ -566,6 +602,9 @@ public class SystemSettingService {
                 .reservationCheckInEarlyMinutes(setting.getReservationCheckInEarlyMinutes())
                 .reservationMinimumAdvanceMinutes(setting.getReservationMinimumAdvanceMinutes())
                 .reservationMaximumAdvanceDays(setting.getReservationMaximumAdvanceDays())
+                .reservationDepositAmount(setting.getReservationDepositAmount())
+                .reservationDepositPaymentTimeoutMinutes(setting.getReservationDepositPaymentTimeoutMinutes())
+                .reservationDepositRefundAdvanceMinutes(setting.getReservationDepositRefundAdvanceMinutes())
                 .vietQrBankId(setting.getVietQrBankId())
                 .vietQrBankName(setting.getVietQrBankName())
                 .vietQrAccountNo(setting.getVietQrAccountNo())
@@ -604,6 +643,9 @@ public class SystemSettingService {
                 .reservationCheckInEarlyMinutes(setting.getReservationCheckInEarlyMinutes())
                 .reservationMinimumAdvanceMinutes(setting.getReservationMinimumAdvanceMinutes())
                 .reservationMaximumAdvanceDays(setting.getReservationMaximumAdvanceDays())
+                .reservationDepositAmount(setting.getReservationDepositAmount())
+                .reservationDepositPaymentTimeoutMinutes(setting.getReservationDepositPaymentTimeoutMinutes())
+                .reservationDepositRefundAdvanceMinutes(setting.getReservationDepositRefundAdvanceMinutes())
                 .updatedAt(setting.getNgayCapNhat())
                 .build();
     }

@@ -123,15 +123,32 @@ public class PaymentService {
                 request.diemSuDung(),
                 order.getTongTien()
         );
-        String paymentMethod = normalizePaymentMethod(request.phuongThucThanhToan());
-        PaymentAmounts amounts = validatePaymentAmounts(loyalty.finalAmount(), request, paymentMethod);
-        String transactionCode = METHOD_BANK_TRANSFER.equals(paymentMethod)
-                ? normalizeTransactionCode(request.maGiaoDich())
-                : null;
+        BigDecimal depositCredit = reservationService.depositCreditForOrder(order);
+        BigDecimal depositApplied = normalizedMoney(depositCredit).min(normalizedMoney(loyalty.finalAmount()));
+        BigDecimal remainingPayable = normalizedMoney(loyalty.finalAmount())
+                .subtract(depositApplied)
+                .max(BigDecimal.ZERO.setScale(2));
 
-        if (transactionCode != null
-                && invoiceRepository.existsByMaGiaoDichIgnoreCase(transactionCode)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã giao dịch đã được sử dụng");
+        String paymentMethod;
+        PaymentAmounts amounts;
+        String transactionCode;
+        if (remainingPayable.signum() == 0) {
+            paymentMethod = "TIEN_COC";
+            amounts = new PaymentAmounts(BigDecimal.ZERO.setScale(2), BigDecimal.ZERO.setScale(2));
+            transactionCode = null;
+        } else {
+            paymentMethod = normalizePaymentMethod(request.phuongThucThanhToan());
+            amounts = validatePaymentAmounts(remainingPayable, request, paymentMethod);
+            transactionCode = METHOD_BANK_TRANSFER.equals(paymentMethod)
+                    ? normalizeTransactionCode(request.maGiaoDich())
+                    : null;
+        }
+
+        if (transactionCode != null) {
+            if (invoiceRepository.existsByMaGiaoDichIgnoreCase(transactionCode)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã giao dịch đã được sử dụng");
+            }
+            reservationService.ensureTransactionCodeNotUsedByDeposit(transactionCode);
         }
 
         LocalDateTime paidAt = LocalDateTime.now();
@@ -141,6 +158,7 @@ public class PaymentService {
         invoice.setKhachHang(loyalty.customer());
         invoice.setTamTinh(normalizedMoney(order.getTamTinh()));
         invoice.setTienGiam(normalizedMoney(order.getTienGiam()));
+        invoice.setTienCocDaKhauTru(depositApplied);
         invoice.setPhiGiaoHang(BigDecimal.ZERO.setScale(2));
         invoice.setDiemDaSuDung(loyalty.pointsUsed());
         invoice.setTienGiamTuDiem(loyalty.pointDiscount());
@@ -166,6 +184,7 @@ public class PaymentService {
         // Lưu hóa đơn trước; ràng buộc unique ma_don_hang/ma_giao_dich là lớp
         // bảo vệ cuối cùng nếu có hai request thanh toán đồng thời.
         Invoice savedInvoice = invoiceRepository.saveAndFlush(invoice);
+        reservationService.applyDepositByOrder(order, depositApplied);
 
         order.setKhachHang(loyalty.customer());
         order.setDiemDaSuDung(loyalty.pointsUsed());
@@ -325,7 +344,11 @@ public class PaymentService {
     public VietQrResponse createVietQr(Integer orderId, String phone, Integer pointsToUse) {
         Order order = findPayableOrder(orderId);
         LoyaltyPreviewResponse preview = loyaltyService.preview(phone, pointsToUse, order.getTongTien());
-        return buildVietQr(order, preview.tongThanhToan());
+        BigDecimal depositCredit = reservationService.depositCreditForOrder(order);
+        BigDecimal payable = normalizedMoney(preview.tongThanhToan())
+                .subtract(normalizedMoney(depositCredit).min(normalizedMoney(preview.tongThanhToan())))
+                .max(BigDecimal.ZERO.setScale(2));
+        return buildVietQr(order, payable);
     }
 
     /**
@@ -345,6 +368,11 @@ public class PaymentService {
                 ? order.getNhanVien().getHoTen()
                 : null;
 
+        BigDecimal depositCredit = reservationService.depositCreditForOrder(order);
+        BigDecimal total = normalizedMoney(order.getTongTien());
+        BigDecimal depositApplied = normalizedMoney(depositCredit).min(total);
+        BigDecimal remainingPayable = total.subtract(depositApplied).max(BigDecimal.ZERO.setScale(2));
+
         return new PaymentSlipResponse(
                 order.getMaDonHang(),
                 String.format("DH%07d", order.getMaDonHang()),
@@ -356,10 +384,12 @@ public class PaymentService {
                 order.getKhuyenMai() == null ? null : order.getKhuyenMai().getMaCode(),
                 normalizedMoney(order.getTamTinh()),
                 normalizedMoney(order.getTienGiam()),
-                normalizedMoney(order.getTongTien()),
+                total,
+                depositApplied,
+                remainingPayable,
                 order.getTrangThai(),
                 items,
-                buildVietQr(order),
+                buildVietQr(order, remainingPayable),
                 LocalDateTime.now(),
                 "PHIEU_TAM_TINH"
         );

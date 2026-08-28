@@ -31,6 +31,9 @@ public class SystemSettingResponse {
     private Integer reservationCheckInEarlyMinutes;
     private Integer reservationMinimumAdvanceMinutes;
     private Integer reservationMaximumAdvanceDays;
+    private BigDecimal reservationDepositAmount;
+    private Integer reservationDepositPaymentTimeoutMinutes;
+    private Integer reservationDepositRefundAdvanceMinutes;
 
     // Giao hàng theo quãng đường
     private Double deliveryTier1DistanceKm;

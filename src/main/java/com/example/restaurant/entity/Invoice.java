@@ -37,6 +37,10 @@ public class Invoice {
     @Column(name = "tien_giam", precision = 12, scale = 2)
     private BigDecimal tienGiam;
 
+    /** Khoản khách đã cọc trước cho lịch đặt bàn và được khấu trừ khi thanh toán. */
+    @Column(name = "tien_coc_da_khau_tru", precision = 12, scale = 2)
+    private BigDecimal tienCocDaKhauTru = BigDecimal.ZERO;
+
     @Column(name = "phi_giao_hang", precision = 12, scale = 2)
     private BigDecimal phiGiaoHang = BigDecimal.ZERO;
 
@@ -107,6 +111,9 @@ public class Invoice {
     private void initializeLoyaltyDefaults() {
         if (phiGiaoHang == null || phiGiaoHang.signum() < 0) {
             phiGiaoHang = BigDecimal.ZERO;
+        }
+        if (tienCocDaKhauTru == null || tienCocDaKhauTru.signum() < 0) {
+            tienCocDaKhauTru = BigDecimal.ZERO;
         }
         if (diemDaSuDung == null || diemDaSuDung < 0) {
             diemDaSuDung = 0;

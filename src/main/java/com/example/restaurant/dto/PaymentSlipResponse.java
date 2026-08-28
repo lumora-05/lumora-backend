@@ -20,6 +20,8 @@ public record PaymentSlipResponse(
         BigDecimal tamTinh,
         BigDecimal tienGiam,
         BigDecimal tongTien,
+        BigDecimal tienCocDaKhauTru,
+        BigDecimal conLaiPhaiThanhToan,
         String trangThaiDonHang,
         List<PaymentSlipItemResponse> items,
         VietQrResponse vietQr,

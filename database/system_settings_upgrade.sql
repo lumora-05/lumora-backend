@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS cai_dat_he_thong (
     reservation_default_duration_minutes INTEGER,
     reservation_preparation_minutes INTEGER,
     reservation_no_show_grace_minutes INTEGER,
+    reservation_deposit_amount NUMERIC(18,2),
+    reservation_deposit_payment_timeout_minutes INTEGER,
+    reservation_deposit_refund_advance_minutes INTEGER,
     delivery_tier1_distance_km DOUBLE PRECISION,
     delivery_tier2_distance_km DOUBLE PRECISION,
     delivery_max_distance_km DOUBLE PRECISION,
@@ -44,6 +47,9 @@ CREATE TABLE IF NOT EXISTS cai_dat_he_thong (
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_default_duration_minutes INTEGER;
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_preparation_minutes INTEGER;
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_no_show_grace_minutes INTEGER;
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_deposit_amount NUMERIC(18,2);
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_deposit_payment_timeout_minutes INTEGER;
+ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS reservation_deposit_refund_advance_minutes INTEGER;
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_tier1_distance_km DOUBLE PRECISION;
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_tier2_distance_km DOUBLE PRECISION;
 ALTER TABLE cai_dat_he_thong ADD COLUMN IF NOT EXISTS delivery_max_distance_km DOUBLE PRECISION;

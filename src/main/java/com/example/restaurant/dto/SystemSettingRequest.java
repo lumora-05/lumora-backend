@@ -64,6 +64,17 @@ public class SystemSettingRequest {
     @Max(value = 365, message = "Số ngày đặt trước tối đa không được vượt quá 365 ngày")
     private Integer reservationMaximumAdvanceDays;
 
+    @DecimalMin(value = "1000", message = "Tiền cọc đặt bàn tối thiểu là 1.000đ")
+    private BigDecimal reservationDepositAmount;
+
+    @Min(value = 1, message = "Thời gian thanh toán cọc tối thiểu là 1 phút")
+    @Max(value = 60, message = "Thời gian thanh toán cọc không được vượt quá 60 phút")
+    private Integer reservationDepositPaymentTimeoutMinutes;
+
+    @Min(value = 0, message = "Mốc hoàn cọc trước giờ đến không được âm")
+    @Max(value = 10080, message = "Mốc hoàn cọc không được vượt quá 7 ngày")
+    private Integer reservationDepositRefundAdvanceMinutes;
+
     // Giao hàng theo quãng đường
     @DecimalMin(value = "0.1", message = "Mốc khoảng cách mức 1 phải lớn hơn 0 km")
     @DecimalMax(value = "100.0", message = "Mốc khoảng cách mức 1 không được vượt quá 100 km")

@@ -16,7 +16,12 @@ Nhánh kết thúc khác:
 CHO_XAC_NHAN -> TU_CHOI
 CHO_XAC_NHAN / DA_XAC_NHAN -> DA_HUY
 DA_XAC_NHAN -> KHONG_DEN
+CHO_XAC_NHAN -> HET_HAN
 ```
+
+## Cọc bắt buộc
+
+Mỗi yêu cầu đặt bàn mới có cọc cố định và thời hạn thanh toán. Thu ngân/Admin chỉ được xác nhận bàn sau khi cọc có trạng thái `DA_THANH_TOAN`. Chi tiết endpoint và chính sách xem `RESERVATION_DEPOSIT_API.md`.
 
 Quy tắc chính:
 

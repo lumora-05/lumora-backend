@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS dat_ban (
     CONSTRAINT ck_dat_ban_trang_thai CHECK (
         trang_thai IN (
             'CHO_XAC_NHAN', 'DA_XAC_NHAN', 'KHACH_DA_DEN', 'DA_XEP_BAN',
-            'HOAN_THANH', 'DA_HUY', 'TU_CHOI', 'KHONG_DEN'
+            'HOAN_THANH', 'DA_HUY', 'TU_CHOI', 'KHONG_DEN', 'HET_HAN'
         )
     ),
     CONSTRAINT ck_dat_ban_so_luong_khach

@@ -18,4 +18,7 @@ public class ReservationPolicyProperties {
     private int checkInEarlyMinutes = 30;
     private int minimumAdvanceMinutes = 30;
     private int maximumAdvanceDays = 60;
+    private java.math.BigDecimal depositAmount = new java.math.BigDecimal("100000");
+    private int depositPaymentTimeoutMinutes = 10;
+    private int depositRefundAdvanceMinutes = 120;
 }

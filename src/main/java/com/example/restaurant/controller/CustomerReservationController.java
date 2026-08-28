@@ -55,6 +55,16 @@ public class CustomerReservationController {
         ));
     }
 
+    @GetMapping("/{code}/deposit/vietqr")
+    public ResponseEntity<ApiResponse<ReservationDepositVietQrResponse>> depositVietQr(
+            @PathVariable String code,
+            @RequestParam String phone) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Tạo VietQR cọc đặt bàn thành công",
+                reservationService.createDepositVietQr(code, phone)
+        ));
+    }
+
     @PutMapping("/{code}")
     public ResponseEntity<ApiResponse<ReservationResponse>> update(
             @PathVariable String code,

@@ -41,5 +41,12 @@ public record ReservationResponse(
         LocalDateTime thoiGianDuKienChuyenBep,
         LocalDateTime thoiGianChuyenBep,
         Boolean canDuyetLaiDatMonTruoc,
-        LocalDateTime thoiGianThayDoiDatMonTruoc
+        LocalDateTime thoiGianThayDoiDatMonTruoc,
+        BigDecimal tienCoc,
+        String trangThaiCoc,
+        BigDecimal tienCocDaKhauTru,
+        LocalDateTime thoiHanThanhToanCoc,
+        LocalDateTime thoiGianThanhToanCoc,
+        LocalDateTime thoiGianHoanCoc,
+        String lyDoXuLyCoc
 ) {}

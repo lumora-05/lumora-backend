@@ -3,6 +3,7 @@ package com.example.restaurant.dto;
 import lombok.Builder;
 import lombok.Getter;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /** Chỉ chứa các cấu hình an toàn và cần thiết cho website công khai. */
@@ -25,5 +26,8 @@ public class PublicSystemSettingResponse {
     private Integer reservationCheckInEarlyMinutes;
     private Integer reservationMinimumAdvanceMinutes;
     private Integer reservationMaximumAdvanceDays;
+    private BigDecimal reservationDepositAmount;
+    private Integer reservationDepositPaymentTimeoutMinutes;
+    private Integer reservationDepositRefundAdvanceMinutes;
     private LocalDateTime updatedAt;
 }
