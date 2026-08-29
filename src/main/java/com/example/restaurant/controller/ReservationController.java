@@ -81,12 +81,11 @@ public class ReservationController {
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<ReservationResponse>> confirmDeposit(
             @PathVariable Integer id,
-            @Valid @RequestBody ReservationDepositConfirmRequest request,
             Authentication authentication) {
         return ResponseEntity.ok(ApiResponse.success(
                 "Xác nhận tiền cọc đặt bàn thành công",
                 reservationService.confirmDeposit(
-                        id, request, authentication.getName(), hasFullReservationAccess(authentication)
+                        id, authentication.getName(), hasFullReservationAccess(authentication)
                 )
         ));
     }

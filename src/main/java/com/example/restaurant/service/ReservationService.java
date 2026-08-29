@@ -12,7 +12,6 @@ import com.example.restaurant.entity.TableReservation;
 import com.example.restaurant.repository.DiningTableRepository;
 import com.example.restaurant.repository.EmployeeRepository;
 import com.example.restaurant.repository.OrderRepository;
-import com.example.restaurant.repository.InvoiceRepository;
 import com.example.restaurant.repository.TableReservationRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -81,7 +80,6 @@ public class ReservationService {
     private final ReservationPolicyProperties reservationPolicyProperties;
     private final RestaurantInfoProperties restaurantInfoProperties;
     private final VietQrProperties vietQrProperties;
-    private final InvoiceRepository invoiceRepository;
 
     public ReservationService(TableReservationRepository reservationRepository,
                               DiningTableRepository diningTableRepository,
@@ -91,8 +89,7 @@ public class ReservationService {
                               SystemActivityService systemActivityService,
                               ReservationPolicyProperties reservationPolicyProperties,
                               RestaurantInfoProperties restaurantInfoProperties,
-                              VietQrProperties vietQrProperties,
-                              InvoiceRepository invoiceRepository) {
+                              VietQrProperties vietQrProperties) {
         this.reservationRepository = reservationRepository;
         this.diningTableRepository = diningTableRepository;
         this.employeeRepository = employeeRepository;
@@ -102,7 +99,6 @@ public class ReservationService {
         this.reservationPolicyProperties = reservationPolicyProperties;
         this.restaurantInfoProperties = restaurantInfoProperties;
         this.vietQrProperties = vietQrProperties;
-        this.invoiceRepository = invoiceRepository;
     }
 
     @Transactional
@@ -151,7 +147,6 @@ public class ReservationService {
     /** Thu ngân/Admin chỉ xác nhận sau khi thực sự kiểm tra tiền đã vào tài khoản. */
     @Transactional
     public ReservationResponse confirmDeposit(Integer id,
-                                               ReservationDepositConfirmRequest request,
                                                String username,
                                                boolean admin) {
         TableReservation reservation = findByIdForUpdate(id);
@@ -170,11 +165,6 @@ public class ReservationService {
         if (LocalDateTime.now().isAfter(reservation.getNgayGioDen().plusMinutes(noShowGraceMinutes()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn đã quá thời gian có thể tiếp nhận");
         }
-        String transactionCode = normalizeDepositTransactionCode(request.maGiaoDich());
-        if (reservationRepository.existsByMaGiaoDichCocIgnoreCase(transactionCode)
-                || invoiceRepository.existsByMaGiaoDichIgnoreCase(transactionCode)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã giao dịch đã được sử dụng");
-        }
         Employee employee = requireActiveEmployee(username);
         if (expiredByDepositTimeout) {
             reservation.setTrangThai(PENDING);
@@ -182,7 +172,6 @@ public class ReservationService {
         }
         reservation.setTrangThaiCoc(DEPOSIT_PAID);
         reservation.setThoiGianThanhToanCoc(LocalDateTime.now());
-        reservation.setMaGiaoDichCoc(transactionCode);
         reservation.setNguoiXacNhanCoc(employee);
         reservation.setLyDoXuLyCoc(null);
         TableReservation saved = reservationRepository.saveAndFlush(reservation);

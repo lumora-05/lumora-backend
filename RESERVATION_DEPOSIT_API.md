@@ -59,16 +59,9 @@ Endpoint chỉ tạo QR, **không tự đánh dấu đã thanh toán**.
 ```http
 POST /api/reservations/{id}/deposit/confirm
 Authorization: Bearer <token>
-Content-Type: application/json
 ```
 
-```json
-{
-  "maGiaoDich": "FT260828123456"
-}
-```
-
-Chỉ `ADMIN` hoặc `CASHIER` được gọi. Mã giao dịch cọc không được trùng mã đã dùng cho cọc hoặc hóa đơn.
+Endpoint này không cần request body. Chỉ `ADMIN` hoặc `CASHIER` được gọi và chỉ xác nhận sau khi đã kiểm tra tiền thực tế vào tài khoản ngân hàng. Backend tự lưu người xác nhận và thời gian xác nhận cọc.
 
 Sau khi cọc được xác nhận, Thu ngân mới có thể gọi:
 
