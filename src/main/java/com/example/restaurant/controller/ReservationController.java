@@ -30,6 +30,7 @@ public class ReservationController {
     @GetMapping
     public ResponseEntity<ApiResponse<PageResponse<ReservationResponse>>> list(
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String depositStatus,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false)
@@ -43,7 +44,7 @@ public class ReservationController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy danh sách đặt bàn thành công",
                 reservationService.findAll(
-                        status, from, to, keyword, area, page, size,
+                        status, depositStatus, from, to, keyword, area, page, size,
                         authentication.getName(), unrestricted
                 )
         ));

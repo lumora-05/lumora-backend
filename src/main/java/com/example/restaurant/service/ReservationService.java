@@ -384,6 +384,7 @@ public class ReservationService {
 
     @Transactional(readOnly = true)
     public PageResponse<ReservationResponse> findAll(String status,
+                                                     String depositStatus,
                                                      LocalDate from,
                                                      LocalDate to,
                                                      String keyword,
@@ -401,6 +402,14 @@ public class ReservationService {
             String normalizedStatus = normalizeStatus(status);
             validateKnownStatus(normalizedStatus);
             spec = spec.and((root, query, cb) -> cb.equal(cb.upper(root.<String>get("trangThai")), normalizedStatus));
+        }
+        if (StringUtils.hasText(depositStatus) && !"ALL".equalsIgnoreCase(depositStatus)) {
+            String normalizedDepositStatus = normalizeStatus(depositStatus);
+            validateKnownDepositStatus(normalizedDepositStatus);
+            spec = spec.and((root, query, cb) -> cb.equal(
+                    cb.upper(root.<String>get("trangThaiCoc")),
+                    normalizedDepositStatus
+            ));
         }
         if (from != null) {
             LocalDateTime start = from.atStartOfDay();
@@ -1448,6 +1457,20 @@ public class ReservationService {
     private void validateKnownStatus(String status) {
         if (!Set.of(PENDING, CONFIRMED, ARRIVED, SEATED, COMPLETED, CANCELLED, REJECTED, NO_SHOW, EXPIRED).contains(status)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái đặt bàn không hợp lệ: " + status);
+        }
+    }
+
+    private void validateKnownDepositStatus(String status) {
+        if (!Set.of(
+                DEPOSIT_PENDING,
+                DEPOSIT_PAID,
+                DEPOSIT_REFUND_PENDING,
+                DEPOSIT_REFUNDED,
+                DEPOSIT_FORFEITED,
+                DEPOSIT_APPLIED,
+                DEPOSIT_CANCELLED
+        ).contains(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái cọc không hợp lệ: " + status);
         }
     }
 
