@@ -54,20 +54,35 @@ Endpoint chỉ tạo QR, **không tự đánh dấu đã thanh toán**.
 
 ## Luồng Thu ngân/Admin
 
-### Xác nhận đã nhận cọc
+### Xác nhận cọc và đặt bàn trong một thao tác (khuyến nghị)
+
+Sau khi Thu ngân/Admin đã kiểm tra tiền thực tế vào tài khoản và chọn bàn dự kiến, gọi:
+
+```http
+POST /api/reservations/{id}/deposit/confirm-and-reservation
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "maBanDuKien": 6,
+  "ghiChu": "Bàn gần cửa sổ"
+}
+```
+
+Backend xử lý trong **một transaction**: xác nhận cọc, lưu người/thời gian xác nhận cọc, kiểm tra và giữ bàn dự kiến, rồi chuyển lịch sang `DA_XAC_NHAN`. Nếu bàn không còn khả dụng hoặc bất kỳ bước nào thất bại thì toàn bộ thao tác được rollback, không có trạng thái xác nhận nửa chừng.
+
+Nếu cọc đã được xác nhận trước đó bằng API cũ nhưng lịch vẫn `CHO_XAC_NHAN`, endpoint này vẫn có thể dùng để hoàn tất bước chọn bàn và xác nhận lịch mà không ghi đè lịch sử xác nhận cọc.
+
+### API xác nhận cọc riêng (giữ để tương thích)
 
 ```http
 POST /api/reservations/{id}/deposit/confirm
 Authorization: Bearer <token>
 ```
 
-Endpoint này không cần request body. Chỉ `ADMIN` hoặc `CASHIER` được gọi và chỉ xác nhận sau khi đã kiểm tra tiền thực tế vào tài khoản ngân hàng. Backend tự lưu người xác nhận và thời gian xác nhận cọc.
-
-Sau khi cọc được xác nhận, Thu ngân mới có thể gọi:
-
-```http
-POST /api/reservations/{id}/confirm
-```
+Endpoint cũ vẫn được giữ để không ảnh hưởng client hiện tại. Nó chỉ xác nhận cọc; sau đó client cũ tiếp tục gọi `POST /api/reservations/{id}/confirm`. Frontend mới nên ưu tiên endpoint gộp ở trên để tránh bắt Thu ngân thao tác hai lần.
 
 ### Ghi nhận đã hoàn cọc
 

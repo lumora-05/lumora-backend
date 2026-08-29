@@ -188,6 +188,83 @@ public class ReservationService {
         return toResponse(saved);
     }
 
+    /**
+     * Thu ngân/Admin xác nhận tiền cọc và lịch đặt bàn trong cùng một transaction.
+     * Frontend dùng API này sau khi nhân viên đã kiểm tra tiền thực tế và chọn bàn dự kiến.
+     * Nếu bàn không còn khả dụng hoặc bất kỳ bước nào thất bại thì toàn bộ thay đổi được rollback.
+     */
+    @Transactional
+    public ReservationResponse confirmDepositAndReservation(Integer id,
+                                                             ReservationConfirmRequest request,
+                                                             String username,
+                                                             boolean admin) {
+        TableReservation reservation = findByIdForUpdate(id);
+        ensureActorCanAccessReservation(reservation, username, admin);
+
+        String reservationStatus = normalizeStatus(reservation.getTrangThai());
+        String depositStatus = normalizeStatus(reservation.getTrangThaiCoc());
+        boolean expiredByDepositTimeout = EXPIRED.equals(reservationStatus)
+                && DEPOSIT_CANCELLED.equals(depositStatus)
+                && "Quá thời hạn thanh toán tiền cọc".equals(reservation.getLyDoHuyTuChoi());
+
+        if (!PENDING.equals(reservationStatus) && !expiredByDepositTimeout) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn không còn ở bước xác nhận");
+        }
+        if (PENDING.equals(reservationStatus)
+                && !Set.of(DEPOSIT_PENDING, DEPOSIT_PAID).contains(depositStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tiền cọc của lịch đặt bàn đã được xử lý");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime confirmDeadline = reservation.getNgayGioDen().plusMinutes(noShowGraceMinutes());
+        if (now.isAfter(confirmDeadline)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Yêu cầu đặt bàn đã quá thời gian xác nhận");
+        }
+
+        Employee employee = requireActiveEmployee(username);
+        DiningTable table = lockTable(request.maBanDuKien());
+        if (!admin) {
+            ensureWaiterCanAccessTable(table, username);
+        }
+        validateTableForReservation(table, reservation);
+        ensureNoOverlap(table, reservation);
+
+        // Chỉ ghi nhận cọc nếu trước đó chưa được xác nhận. Nếu cọc đã được xác nhận
+        // bằng API cũ thì vẫn cho phép hoàn tất đặt bàn mà không ghi đè lịch sử cọc.
+        if (!DEPOSIT_PAID.equals(depositStatus)) {
+            if (!DEPOSIT_PENDING.equals(depositStatus) && !expiredByDepositTimeout) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Tiền cọc của lịch đặt bàn không thể xác nhận");
+            }
+            reservation.setTrangThaiCoc(DEPOSIT_PAID);
+            reservation.setThoiGianThanhToanCoc(now);
+            reservation.setNguoiXacNhanCoc(employee);
+            reservation.setLyDoXuLyCoc(null);
+        }
+
+        reservation.setBanDuKien(table);
+        reservation.setTrangThai(CONFIRMED);
+        reservation.setNguoiXacNhan(employee);
+        reservation.setThoiGianXacNhan(now);
+        reservation.setLyDoHuyTuChoi(null);
+        if (StringUtils.hasText(request.ghiChu())) {
+            reservation.setGhiChu(mergeNotes(reservation.getGhiChu(), request.ghiChu()));
+        }
+
+        TableReservation saved = reservationRepository.saveAndFlush(reservation);
+        systemActivityService.record(
+                "RESERVATION_DEPOSIT_AND_CONFIRMED",
+                "Đã xác nhận cọc và lịch " + saved.getMaTraCuu()
+                        + ", giữ dự kiến " + effectiveTableName(table),
+                saved.getMaDatBan()
+        );
+        realtimeNotificationService.notifyReservationChanged(
+                "RESERVATION_DEPOSIT_AND_CONFIRMED",
+                "Tiền cọc và lịch đặt bàn đã được xác nhận",
+                saved
+        );
+        return toResponse(saved);
+    }
+
     /** Ghi nhận nhân viên đã thực sự hoàn khoản cọc đang chờ hoàn. */
     @Transactional
     public ReservationResponse markDepositRefunded(Integer id,

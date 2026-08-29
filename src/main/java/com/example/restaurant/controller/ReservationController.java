@@ -91,6 +91,20 @@ public class ReservationController {
         ));
     }
 
+    @PostMapping("/{id}/deposit/confirm-and-reservation")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
+    public ResponseEntity<ApiResponse<ReservationResponse>> confirmDepositAndReservation(
+            @PathVariable Integer id,
+            @Valid @RequestBody ReservationConfirmRequest request,
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Xác nhận tiền cọc và đặt bàn thành công",
+                reservationService.confirmDepositAndReservation(
+                        id, request, authentication.getName(), hasFullReservationAccess(authentication)
+                )
+        ));
+    }
+
     @PostMapping("/{id}/deposit/refund")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<ReservationResponse>> refundDeposit(
