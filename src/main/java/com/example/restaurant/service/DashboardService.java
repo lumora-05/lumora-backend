@@ -102,8 +102,10 @@ public class DashboardService {
     }
 
     @Transactional(readOnly = true)
-    public List<OrderStatusChartResponse> orderStatusChart() {
-        return orderRepository.countByTrangThaiGroup().stream()
+    public List<OrderStatusChartResponse> orderStatusChart(LocalDate from, LocalDate to) {
+        LocalDateTime start = from.atStartOfDay();
+        LocalDateTime end = to.plusDays(1).atStartOfDay().minusNanos(1);
+        return orderRepository.countByTrangThaiGroupBetween(start, end).stream()
                 .map(row -> new OrderStatusChartResponse(
                         (String) row[0],
                         ((Number) row[1]).longValue()

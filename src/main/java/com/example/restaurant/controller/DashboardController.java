@@ -50,8 +50,15 @@ public class DashboardController {
     }
 
     @GetMapping("/charts/order-status")
-    public ResponseEntity<ApiResponse<List<OrderStatusChartResponse>>> orderStatusChart() {
-        return ResponseEntity.ok(ApiResponse.success("Lấy dữ liệu biểu đồ trạng thái đơn hàng thành công", dashboardService.orderStatusChart()));
+    public ResponseEntity<ApiResponse<List<OrderStatusChartResponse>>> orderStatusChart(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        LocalDate end = to == null ? LocalDate.now() : to;
+        LocalDate start = from == null ? end.minusDays(6) : from;
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy dữ liệu biểu đồ trạng thái đơn hàng thành công",
+                dashboardService.orderStatusChart(start, end)
+        ));
     }
 
     @GetMapping("/charts/top-foods")

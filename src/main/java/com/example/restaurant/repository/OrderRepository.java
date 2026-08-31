@@ -132,4 +132,13 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
 
         @Query("select o.trangThai, count(o) from Order o group by o.trangThai order by count(o) desc")
         List<Object[]> countByTrangThaiGroup();
+
+        @Query("""
+                        select o.trangThai, count(o) from Order o
+                        where o.thoiGianDat between :start and :end
+                        group by o.trangThai
+                        order by count(o) desc
+                        """)
+        List<Object[]> countByTrangThaiGroupBetween(@Param("start") java.time.LocalDateTime start,
+                        @Param("end") java.time.LocalDateTime end);
 }
