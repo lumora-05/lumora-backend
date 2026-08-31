@@ -4,6 +4,7 @@ import com.example.restaurant.dto.CustomerAccountResponse;
 import com.example.restaurant.dto.CustomerAuthResponse;
 import com.example.restaurant.dto.CustomerLoginRequest;
 import com.example.restaurant.dto.CustomerRegisterRequest;
+import com.example.restaurant.dto.CustomerProfileUpdateRequest;
 import com.example.restaurant.entity.Customer;
 import com.example.restaurant.repository.CustomerRepository;
 import org.springframework.http.HttpStatus;
@@ -51,6 +52,34 @@ public class CustomerAccountService {
         customer.setHoTen(requiredText(request.hoTen(), "Họ tên không hợp lệ"));
         customer.setMatKhauHash(passwordEncoder.encode(request.matKhau()));
         Customer saved = customerRepository.saveAndFlush(customer);
+        return toAuthResponse(saved);
+    }
+
+    @Transactional
+    public CustomerAuthResponse updateProfile(String authorizationHeader, CustomerProfileUpdateRequest request) {
+        Integer customerId = requireCustomerId(authorizationHeader);
+        Customer customer = customerRepository.findByIdForUpdate(customerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tài khoản khách hàng không còn tồn tại"));
+
+        if (!"HOAT_DONG".equalsIgnoreCase(customer.getTrangThai())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tài khoản khách hàng đã ngừng hoạt động");
+        }
+
+        String newName = requiredText(request.hoTen(), "Họ tên không hợp lệ");
+        String newPhone = normalizePhone(request.soDienThoai());
+
+        if (!newPhone.equals(customer.getSoDienThoai())) {
+            Customer existing = customerRepository.findBySoDienThoaiForUpdate(newPhone).orElse(null);
+            if (existing != null && !existing.getMaKhachHang().equals(customerId)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Số điện thoại đã được sử dụng");
+            }
+        }
+
+        customer.setHoTen(newName);
+        customer.setSoDienThoai(newPhone);
+        Customer saved = customerRepository.saveAndFlush(customer);
+
+        // Cấp lại JWT để claim số điện thoại luôn đồng bộ khi khách đổi số.
         return toAuthResponse(saved);
     }
 

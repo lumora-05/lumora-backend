@@ -5,6 +5,7 @@ import com.example.restaurant.dto.CustomerAccountResponse;
 import com.example.restaurant.dto.CustomerAuthResponse;
 import com.example.restaurant.dto.CustomerLoginRequest;
 import com.example.restaurant.dto.CustomerRegisterRequest;
+import com.example.restaurant.dto.CustomerProfileUpdateRequest;
 import com.example.restaurant.dto.DeliveryTrackingResponse;
 import com.example.restaurant.entity.Customer;
 import com.example.restaurant.service.CustomerAccountService;
@@ -42,6 +43,16 @@ public class CustomerAccountController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Đăng nhập khách hàng thành công",
                 customerAccountService.login(request)
+        ));
+    }
+
+    @PutMapping("/me")
+    public ResponseEntity<ApiResponse<CustomerAuthResponse>> updateProfile(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @Valid @RequestBody CustomerProfileUpdateRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Cập nhật thông tin tài khoản thành công",
+                customerAccountService.updateProfile(authorization, request)
         ));
     }
 
