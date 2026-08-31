@@ -42,13 +42,13 @@ public class MockDeliveryProviderService implements DeliveryProviderService {
 
         String provider = StringUtils.hasText(deliveryProperties.getMockProviderName())
                 ? deliveryProperties.getMockProviderName().trim()
-                : "Đối tác giao hàng (Demo)";
+                : "Grab (Demo)";
         String prefix = StringUtils.hasText(deliveryProperties.getMockWaybillPrefix())
                 ? deliveryProperties.getMockWaybillPrefix().trim().toUpperCase(Locale.ROOT)
-                : "DELIVERY-DEMO";
+                : "GRAB-DEMO";
         prefix = prefix.replaceAll("[^A-Z0-9-]", "");
         if (prefix.isBlank()) {
-            prefix = "DELIVERY-DEMO";
+            prefix = "GRAB-DEMO";
         }
 
         String randomPart = UUID.randomUUID().toString().replace("-", "")

@@ -20,8 +20,8 @@ public class DeliveryProperties {
     private List<String> innerDistricts = new ArrayList<>(List.of("Thanh Khê", "Hải Châu"));
     private List<String> nearbyDistricts = new ArrayList<>(List.of("Sơn Trà", "Ngũ Hành Sơn", "Cẩm Lệ", "Liên Chiểu", "Hòa Vang"));
     private String shippingCodePrefix = "LUM-VC";
-    private String mockProviderName = "Đối tác giao hàng (Demo)";
-    private String mockWaybillPrefix = "DELIVERY-DEMO";
+    private String mockProviderName = "Grab (Demo)";
+    private String mockWaybillPrefix = "GRAB-DEMO";
     private Integer maxUnitsPerItem = 50;
     private Integer maxUnitsPerOrder = 100;
     private Integer paymentTimeoutMinutes = 15;
