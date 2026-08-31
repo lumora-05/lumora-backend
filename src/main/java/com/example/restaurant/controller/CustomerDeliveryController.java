@@ -63,7 +63,17 @@ public class CustomerDeliveryController {
         ));
     }
 
-    /** Tra cứu bằng token ngẫu nhiên, không công khai entity nhân viên hoặc dữ liệu nội bộ. */
+    /** Tra cứu thủ công bằng mã đơn thân thiện với khách, ví dụ DH0000191. */
+    @GetMapping("/orders/lookup")
+    public ResponseEntity<ApiResponse<DeliveryTrackingResponse>> lookupByOrderCode(
+            @RequestParam String orderCode) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Tra cứu đơn giao hàng thành công",
+                deliveryOrderService.trackByOrderCode(orderCode)
+        ));
+    }
+
+    /** Tra cứu trực tiếp bằng token ngẫu nhiên dùng cho link theo dõi đã được hệ thống cấp. */
     @GetMapping("/orders/{trackingToken}")
     public ResponseEntity<ApiResponse<DeliveryTrackingResponse>> track(
             @PathVariable String trackingToken) {

@@ -441,6 +441,17 @@ public class DeliveryOrderService {
     }
 
     @Transactional(readOnly = true)
+    public DeliveryTrackingResponse trackByOrderCode(String orderCode) {
+        Integer orderId = parseOrderCode(orderCode);
+        Order order = orderRepository.findById(orderId)
+                .map(this::requireDeliveryOrder)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Không tìm thấy đơn giao hàng"));
+        return toTrackingResponse(order);
+    }
+
+    @Transactional(readOnly = true)
     public DeliveryTrackingResponse track(String trackingToken) {
         OrderDelivery delivery = deliveryRepository.findByTrackingToken(requiredText(
                 trackingToken,
@@ -1845,6 +1856,24 @@ public class DeliveryOrderService {
 
     private String formatOrderCode(Integer orderId) {
         return orderId == null ? null : String.format("DH%07d", orderId);
+    }
+
+    private Integer parseOrderCode(String orderCode) {
+        String normalizedCode = requiredText(orderCode, "Mã đơn hàng không hợp lệ")
+                .trim()
+                .toUpperCase(Locale.ROOT);
+        if (!normalizedCode.matches("^DH[0-9]+$")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã đơn hàng không hợp lệ");
+        }
+        try {
+            int orderId = Integer.parseInt(normalizedCode.substring(2));
+            if (orderId <= 0) {
+                throw new NumberFormatException("orderId must be positive");
+            }
+            return orderId;
+        } catch (NumberFormatException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã đơn hàng không hợp lệ");
+        }
     }
 
     private String normalizePhone(String value) {
