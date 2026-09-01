@@ -141,8 +141,11 @@ public class MenuService {
 
     @Transactional
     public Food create(FoodRequest request) {
+        String normalizedName = normalizeFoodName(request.tenMonAn());
+        ensureFoodNameAvailable(normalizedName, null);
+
         Food food = new Food();
-        apply(food, request);
+        apply(food, request, normalizedName);
         Food savedFood = foodRepository.save(food);
         systemActivityService.record(
                 "FOOD_CREATED",
@@ -156,8 +159,14 @@ public class MenuService {
     @Transactional
     public Food update(Integer id, FoodRequest request) {
         Food food = findById(id);
+        String normalizedName = normalizeFoodName(request.tenMonAn());
+        String currentNormalizedName = normalizeFoodName(food.getTenMonAn());
+        if (!currentNormalizedName.equalsIgnoreCase(normalizedName)) {
+            ensureFoodNameAvailable(normalizedName, id);
+        }
+
         String oldImageUrl = food.getHinhAnh();
-        apply(food, request);
+        apply(food, request, normalizedName);
         Food savedFood = foodRepository.save(food);
         deleteFoodImageAfterCommitIfChanged(oldImageUrl, savedFood.getHinhAnh());
         systemActivityService.record(
@@ -266,14 +275,30 @@ public class MenuService {
         return Math.min(Math.max(size, 1), 100);
     }
 
-    private void apply(Food food, FoodRequest request) {
+    private String normalizeFoodName(String value) {
+        return value == null ? "" : value.trim().replaceAll("\\s+", " ");
+    }
+
+    private void ensureFoodNameAvailable(String normalizedName, Integer currentFoodId) {
+        boolean exists = currentFoodId == null
+                ? foodRepository.existsByTenMonAnIgnoreCase(normalizedName)
+                : foodRepository.existsByTenMonAnIgnoreCaseAndMaMonAnNot(normalizedName, currentFoodId);
+        if (exists) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Tên món ăn đã tồn tại. Vui lòng chọn tên khác."
+            );
+        }
+    }
+
+    private void apply(Food food, FoodRequest request, String normalizedName) {
         Category category = categoryRepository.findById(request.maDanhMuc())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy danh mục: " + request.maDanhMuc()));
         if (!Boolean.TRUE.equals(category.getTrangThai())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Danh mục món ăn đang bị khóa");
         }
         food.setDanhMuc(category);
-        food.setTenMonAn(request.tenMonAn().trim());
+        food.setTenMonAn(normalizedName);
         food.setGia(request.gia());
         food.setMoTa(trimToNull(request.moTa()));
         food.setHinhAnh(request.hinhAnh());

@@ -19,6 +19,9 @@ public interface FoodRepository extends JpaRepository<Food, Integer>, JpaSpecifi
     List<Food> findByDanhMuc_MaDanhMucAndTrangThaiTrue(Integer maDanhMuc);
     long countByTrangThaiTrue();
 
+    boolean existsByTenMonAnIgnoreCase(String tenMonAn);
+    boolean existsByTenMonAnIgnoreCaseAndMaMonAnNot(String tenMonAn, Integer maMonAn);
+
     @Query("""
             select f.danhMuc.maDanhMuc as maDanhMuc, count(f) as soMon
             from Food f
