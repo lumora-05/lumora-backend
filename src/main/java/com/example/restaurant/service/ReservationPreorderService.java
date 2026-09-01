@@ -39,6 +39,9 @@ public class ReservationPreorderService {
     private static final String PREORDER_SENT = "DA_CHUYEN_BEP";
     private static final String PREORDER_CANCELLED = "DA_HUY";
 
+    private static final String DEPOSIT_PENDING = "CHO_THANH_TOAN";
+    private static final String DEPOSIT_PAID = "DA_THANH_TOAN";
+
     private static final int DEFAULT_PREPARATION_MINUTES = 30;
     private static final Set<String> OPEN_ORDER_STATUSES = Set.of(
             "CHO_XAC_NHAN", "DA_XAC_NHAN", "DANG_CHUAN_BI", "DANG_CHE_BIEN",
@@ -95,10 +98,11 @@ public class ReservationPreorderService {
         TableReservation reservation = findByCodeForUpdate(code);
         verifyCustomerPhone(reservation, phone);
         ensureCustomerCanEdit(reservation);
-        if (!"DA_THANH_TOAN".equals(normalizeStatus(reservation.getTrangThaiCoc()))) {
+        String depositStatus = normalizeStatus(reservation.getTrangThaiCoc());
+        if (!Set.of(DEPOSIT_PENDING, DEPOSIT_PAID).contains(depositStatus)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Vui lòng thanh toán tiền cọc đặt bàn trước khi chọn món đặt trước"
+                    "Không thể cập nhật món đặt trước khi trạng thái tiền cọc không còn hợp lệ"
             );
         }
 
