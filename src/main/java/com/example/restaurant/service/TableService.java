@@ -6,6 +6,8 @@ import com.example.restaurant.entity.DiningTable;
 import com.example.restaurant.entity.Employee;
 import com.example.restaurant.repository.DiningTableRepository;
 import com.example.restaurant.repository.EmployeeRepository;
+import com.example.restaurant.repository.OrderRepository;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +30,29 @@ public class TableService {
             "DANG_THANH_TOAN"
     );
 
+    /**
+     * Trạng thái mà Admin được phép chuyển thủ công.
+     * Các trạng thái phục vụ/thanh toán phải do luồng nghiệp vụ tự cập nhật để
+     * tránh bàn và đơn hàng bị lệch trạng thái.
+     */
+    private static final Set<String> ADMIN_MANUAL_TABLE_STATUSES = Set.of(
+            "TRONG",
+            "BAO_TRI"
+    );
+
+    private static final Set<String> OPEN_ORDER_STATUSES = Set.of(
+            "CHO_XAC_NHAN",
+            "DA_XAC_NHAN",
+            "DANG_CHUAN_BI",
+            "DANG_CHE_BIEN",
+            "SAN_SANG",
+            "SAN_SANG_PHUC_VU",
+            "DA_HOAN_THANH",
+            "DA_PHUC_VU",
+            "CHO_THANH_TOAN",
+            "SAN_SANG_THANH_TOAN"
+    );
+
     private static final Set<String> QR_STATUSES = Set.of(
             "DANG_HOAT_DONG",
             "TAM_NGUNG",
@@ -36,13 +61,16 @@ public class TableService {
 
     private final DiningTableRepository diningTableRepository;
     private final EmployeeRepository employeeRepository;
+    private final OrderRepository orderRepository;
     private final QrCodeService qrCodeService;
 
     public TableService(DiningTableRepository diningTableRepository,
                         EmployeeRepository employeeRepository,
+                        OrderRepository orderRepository,
                         QrCodeService qrCodeService) {
         this.diningTableRepository = diningTableRepository;
         this.employeeRepository = employeeRepository;
+        this.orderRepository = orderRepository;
         this.qrCodeService = qrCodeService;
     }
 
@@ -107,7 +135,8 @@ public class TableService {
         }
 
         DiningTable table = new DiningTable();
-        apply(table, request);
+        applyEditableFields(table, request);
+        table.setTrangThai(resolveCreateStatus(request.trangThai()));
         table.setMaQr(null);
         table.setQrToken(generateUniqueQrToken());
         table.setAnhQr(null);
@@ -125,7 +154,8 @@ public class TableService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Tên bàn đã tồn tại: " + tableName);
         }
 
-        apply(table, request);
+        applyEditableFields(table, request);
+        applyAdminStatusUpdate(table, request.trangThai());
         return diningTableRepository.save(table);
     }
 
@@ -180,19 +210,73 @@ public class TableService {
         diningTableRepository.delete(table);
     }
 
-    private void apply(DiningTable table, TableRequest request) {
+    private void applyEditableFields(DiningTable table, TableRequest request) {
         table.setTenBan(normalizeRequired(request.tenBan(), "Tên bàn không được để trống"));
         table.setGhiChu(trimToNull(request.ghiChu()));
         table.setKhuVuc(resolveArea(request));
         table.setSucChua(request.sucChua() == null ? 4 : request.sucChua());
+    }
 
-        String tableStatus = StringUtils.hasText(request.trangThai())
-                ? normalizeStatus(request.trangThai())
+    private String resolveCreateStatus(String requestedStatus) {
+        String status = StringUtils.hasText(requestedStatus)
+                ? normalizeStatus(requestedStatus)
                 : "TRONG";
-        if (!TABLE_STATUSES.contains(tableStatus)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái bàn không hợp lệ: " + tableStatus);
+        validateKnownTableStatus(status);
+        if (!ADMIN_MANUAL_TABLE_STATUSES.contains(status)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Bàn mới chỉ được tạo ở trạng thái TRONG hoặc BAO_TRI"
+            );
         }
-        table.setTrangThai(tableStatus);
+        return status;
+    }
+
+    private void applyAdminStatusUpdate(DiningTable table, String requestedStatus) {
+        // Không truyền trạng thái khi sửa tên/khu vực/sức chứa thì giữ nguyên trạng thái hiện tại.
+        if (!StringUtils.hasText(requestedStatus)) {
+            return;
+        }
+
+        String currentStatus = normalizeStatus(table.getTrangThai());
+        String targetStatus = normalizeStatus(requestedStatus);
+        validateKnownTableStatus(targetStatus);
+
+        // Cho phép frontend gửi lại đúng trạng thái hiện tại khi chỉ sửa thông tin bàn.
+        if (targetStatus.equals(currentStatus)) {
+            return;
+        }
+
+        if (!ADMIN_MANUAL_TABLE_STATUSES.contains(currentStatus)
+                || !ADMIN_MANUAL_TABLE_STATUSES.contains(targetStatus)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Không thể đổi thủ công trạng thái bàn từ " + currentStatus + " sang " + targetStatus
+                            + ". Trạng thái phục vụ/thanh toán do hệ thống tự cập nhật."
+            );
+        }
+
+        ensureTableHasNoOpenOrder(table);
+        table.setTrangThai(targetStatus);
+    }
+
+    private void validateKnownTableStatus(String status) {
+        if (!TABLE_STATUSES.contains(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Trạng thái bàn không hợp lệ: " + status);
+        }
+    }
+
+    private void ensureTableHasNoOpenOrder(DiningTable table) {
+        boolean hasOpenOrder = !orderRepository.findOpenOrders(
+                table.getMaBan(),
+                OPEN_ORDER_STATUSES,
+                PageRequest.of(0, 1)
+        ).isEmpty();
+        if (hasOpenOrder) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Bàn đang có đơn hàng hoạt động nên không thể thay đổi trạng thái thủ công"
+            );
+        }
     }
 
     private String resolveArea(TableRequest request) {
