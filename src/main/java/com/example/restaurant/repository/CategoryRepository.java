@@ -8,4 +8,8 @@ import java.util.List;
 
 public interface CategoryRepository extends JpaRepository<Category, Integer>, JpaSpecificationExecutor<Category> {
     List<Category> findByTrangThaiTrue();
+
+    boolean existsByTenDanhMucIgnoreCase(String tenDanhMuc);
+
+    boolean existsByTenDanhMucIgnoreCaseAndMaDanhMucNot(String tenDanhMuc, Integer maDanhMuc);
 }

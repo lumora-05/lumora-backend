@@ -110,9 +110,7 @@ public class EmployeeService {
 
     @Transactional
     public Employee create(EmployeeRequest request) {
-        if (employeeRepository.existsByTenDangNhap(request.tenDangNhap())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tên đăng nhập đã tồn tại");
-        }
+        validateUniqueIdentity(request, null);
         if (request.matKhau() == null || request.matKhau().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mật khẩu không được bỏ trống khi tạo nhân viên");
         }
@@ -130,6 +128,7 @@ public class EmployeeService {
     @Transactional
     public Employee update(Integer id, EmployeeRequest request) {
         Employee employee = findById(id);
+        validateUniqueIdentity(request, id);
         apply(employee, request, false);
         Employee savedEmployee = employeeRepository.save(employee);
         systemActivityService.record(
@@ -176,10 +175,10 @@ public class EmployeeService {
         Role role = roleRepository.findByTenVaiTro(request.tenVaiTro())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Không tìm thấy vai trò: " + request.tenVaiTro()));
-        employee.setHoTen(request.hoTen());
-        employee.setSoDienThoai(request.soDienThoai());
-        employee.setEmail(request.email());
-        employee.setTenDangNhap(request.tenDangNhap());
+        employee.setHoTen(request.hoTen().trim());
+        employee.setSoDienThoai(trimToNull(request.soDienThoai()));
+        employee.setEmail(trimToNull(request.email()));
+        employee.setTenDangNhap(request.tenDangNhap().trim());
         if (creating || (request.matKhau() != null && !request.matKhau().isBlank())) {
             employee.setMatKhau(passwordEncoder.encode(request.matKhau()));
         }
@@ -188,6 +187,42 @@ public class EmployeeService {
         if (request.trangThai() != null) {
             employee.setTrangThai(request.trangThai());
         }
+    }
+
+
+    private void validateUniqueIdentity(EmployeeRequest request, Integer currentEmployeeId) {
+        String username = request.tenDangNhap().trim();
+        String email = trimToNull(request.email());
+
+        boolean duplicateUsername = currentEmployeeId == null
+                ? employeeRepository.existsByTenDangNhapIgnoreCase(username)
+                : employeeRepository.existsByTenDangNhapIgnoreCaseAndMaNhanVienNot(username, currentEmployeeId);
+        if (duplicateUsername) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Tên đăng nhập đã tồn tại. Vui lòng chọn tên khác."
+            );
+        }
+
+        if (email != null) {
+            boolean duplicateEmail = currentEmployeeId == null
+                    ? employeeRepository.existsByEmailIgnoreCase(email)
+                    : employeeRepository.existsByEmailIgnoreCaseAndMaNhanVienNot(email, currentEmployeeId);
+            if (duplicateEmail) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Email đã tồn tại. Vui lòng sử dụng email khác."
+                );
+            }
+        }
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private void applyAssignedArea(Employee employee,

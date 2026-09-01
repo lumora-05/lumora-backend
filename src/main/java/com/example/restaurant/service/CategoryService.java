@@ -82,14 +82,20 @@ public class CategoryService {
     }
 
     public Category create(CategoryRequest request) {
+        String normalizedName = normalizeName(request.tenDanhMuc());
+        ensureCategoryNameAvailable(normalizedName, null);
+
         Category category = new Category();
-        apply(category, request);
+        apply(category, request, normalizedName);
         return categoryRepository.save(category);
     }
 
     public Category update(Integer id, CategoryRequest request) {
         Category category = findById(id);
-        apply(category, request);
+        String normalizedName = normalizeName(request.tenDanhMuc());
+        ensureCategoryNameAvailable(normalizedName, id);
+
+        apply(category, request, normalizedName);
         return categoryRepository.save(category);
     }
 
@@ -116,12 +122,28 @@ public class CategoryService {
                 ));
     }
 
-    private void apply(Category category, CategoryRequest request) {
-        category.setTenDanhMuc(request.tenDanhMuc().trim());
+    private void apply(Category category, CategoryRequest request, String normalizedName) {
+        category.setTenDanhMuc(normalizedName);
         category.setMoTa(trimToNull(request.moTa()));
         if (request.trangThai() != null) {
             category.setTrangThai(request.trangThai());
         }
+    }
+
+    private void ensureCategoryNameAvailable(String normalizedName, Integer currentCategoryId) {
+        boolean exists = currentCategoryId == null
+                ? categoryRepository.existsByTenDanhMucIgnoreCase(normalizedName)
+                : categoryRepository.existsByTenDanhMucIgnoreCaseAndMaDanhMucNot(normalizedName, currentCategoryId);
+        if (exists) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Tên danh mục đã tồn tại. Vui lòng chọn tên khác."
+            );
+        }
+    }
+
+    private String normalizeName(String value) {
+        return value.trim().replaceAll("\\s+", " ");
     }
 
     private String trimToNull(String value) {

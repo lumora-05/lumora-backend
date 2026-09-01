@@ -22,5 +22,8 @@ public interface EmployeeRepository extends JpaRepository<Employee, Integer>, Jp
     @Query("select e from Employee e where lower(e.email) = lower(:email)")
     Optional<Employee> findByEmailIgnoreCaseForUpdate(@Param("email") String email);
     boolean existsByTenDangNhap(String tenDangNhap);
+    boolean existsByTenDangNhapIgnoreCase(String tenDangNhap);
+    boolean existsByTenDangNhapIgnoreCaseAndMaNhanVienNot(String tenDangNhap, Integer maNhanVien);
+    boolean existsByEmailIgnoreCase(String email);
     boolean existsByEmailIgnoreCaseAndMaNhanVienNot(String email, Integer maNhanVien);
 }
