@@ -21,13 +21,16 @@ public class CustomerAccountService {
     private final CustomerRepository customerRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final LoginAttemptService loginAttemptService;
 
     public CustomerAccountService(CustomerRepository customerRepository,
                                   PasswordEncoder passwordEncoder,
-                                  JwtService jwtService) {
+                                  JwtService jwtService,
+                                  LoginAttemptService loginAttemptService) {
         this.customerRepository = customerRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.loginAttemptService = loginAttemptService;
     }
 
     @Transactional
@@ -86,13 +89,18 @@ public class CustomerAccountService {
     @Transactional(readOnly = true)
     public CustomerAuthResponse login(CustomerLoginRequest request) {
         String phone = normalizePhone(request.soDienThoai());
-        Customer customer = customerRepository.findBySoDienThoai(phone)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Số điện thoại hoặc mật khẩu không đúng"));
+        loginAttemptService.assertAllowed("CUSTOMER", phone);
 
-        if (!StringUtils.hasText(customer.getMatKhauHash())
+        Customer customer = customerRepository.findBySoDienThoai(phone).orElse(null);
+        if (customer == null
+                || !StringUtils.hasText(customer.getMatKhauHash())
                 || !passwordEncoder.matches(request.matKhau(), customer.getMatKhauHash())) {
+            loginAttemptService.recordFailure("CUSTOMER", phone);
+            loginAttemptService.assertAllowed("CUSTOMER", phone);
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Số điện thoại hoặc mật khẩu không đúng");
         }
+
+        loginAttemptService.reset("CUSTOMER", phone);
         if (!"HOAT_DONG".equalsIgnoreCase(customer.getTrangThai())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tài khoản khách hàng đã ngừng hoạt động");
         }

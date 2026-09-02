@@ -29,19 +29,22 @@ public class AuthService {
     private final CustomerAccountService customerAccountService;
     private final JwtService jwtService;
     private final GoogleTokenService googleTokenService;
+    private final LoginAttemptService loginAttemptService;
 
     public AuthService(AuthenticationManager authenticationManager,
                        EmployeeRepository employeeRepository,
                        EmployeeDetailsService employeeDetailsService,
                        CustomerAccountService customerAccountService,
                        JwtService jwtService,
-                       GoogleTokenService googleTokenService) {
+                       GoogleTokenService googleTokenService,
+                       LoginAttemptService loginAttemptService) {
         this.authenticationManager = authenticationManager;
         this.employeeRepository = employeeRepository;
         this.employeeDetailsService = employeeDetailsService;
         this.customerAccountService = customerAccountService;
         this.jwtService = jwtService;
         this.googleTokenService = googleTokenService;
+        this.loginAttemptService = loginAttemptService;
     }
 
     /**
@@ -56,13 +59,24 @@ public class AuthService {
 
         Optional<Employee> employee = employeeRepository.findByTenDangNhap(identifier);
         if (employee.isPresent()) {
-            authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(identifier, request.password())
-            );
+            loginAttemptService.assertAllowed("EMPLOYEE", identifier);
+            try {
+                authenticationManager.authenticate(
+                        new UsernamePasswordAuthenticationToken(identifier, request.password())
+                );
+            } catch (BadCredentialsException ex) {
+                loginAttemptService.recordFailure("EMPLOYEE", identifier);
+                loginAttemptService.assertAllowed("EMPLOYEE", identifier);
+                throw ex;
+            }
+            loginAttemptService.reset("EMPLOYEE", identifier);
             return createEmployeeAuthResponse(employee.get());
         }
 
         if (!looksLikePhone(identifier)) {
+            loginAttemptService.assertAllowed("EMPLOYEE", identifier);
+            loginAttemptService.recordFailure("EMPLOYEE", identifier);
+            loginAttemptService.assertAllowed("EMPLOYEE", identifier);
             throw new BadCredentialsException("Thông tin đăng nhập không đúng");
         }
 
@@ -73,7 +87,8 @@ public class AuthService {
             return createCustomerAuthResponse(customer);
         } catch (ResponseStatusException ex) {
             // Giữ nguyên thông báo tài khoản khách hàng đã bị ngừng hoạt động.
-            if (ex.getStatusCode().value() == HttpStatus.FORBIDDEN.value()) {
+            if (ex.getStatusCode().value() == HttpStatus.FORBIDDEN.value()
+                    || ex.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value()) {
                 throw ex;
             }
 
