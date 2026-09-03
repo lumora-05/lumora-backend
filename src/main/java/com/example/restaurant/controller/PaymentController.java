@@ -4,10 +4,12 @@ import com.example.restaurant.dto.ApiResponse;
 import com.example.restaurant.dto.LoyaltyPreviewResponse;
 import com.example.restaurant.dto.PaymentRequest;
 import com.example.restaurant.dto.PaymentSlipResponse;
+import com.example.restaurant.dto.PayOsWebhookResponse;
 import com.example.restaurant.dto.RevenueResponse;
 import com.example.restaurant.dto.VietQrResponse;
 import com.example.restaurant.entity.Invoice;
 import com.example.restaurant.service.PaymentService;
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
@@ -27,8 +29,8 @@ public class PaymentController {
     }
 
     /**
-     * Bước xác nhận thanh toán cuối cùng. Chỉ gọi sau khi thu ngân đã thực sự
-     * nhận tiền mặt hoặc đã kiểm tra tiền chuyển khoản vào tài khoản.
+     * Xác nhận thanh toán tiền mặt. Chuyển khoản VietQR không đi qua endpoint
+     * này nữa mà được hoàn tất tự động khi webhook payOS hợp lệ được nhận.
      */
     @PostMapping
     @PreAuthorize("hasRole('CASHIER')")
@@ -52,17 +54,36 @@ public class PaymentController {
     }
 
     /**
-     * Sinh VietQR theo đúng tổng tiền và nội dung của đơn. Endpoint chỉ đọc dữ
-     * liệu, không tạo hóa đơn và không thay đổi trạng thái đơn hoặc bàn.
+     * Tạo payment request payOS và trả VietQR theo đúng số tiền của đơn. Việc
+     * mở QR chưa được xem là thanh toán; trạng thái chỉ đổi sau webhook hợp lệ.
      */
     @GetMapping("/vietqr/order/{orderId}")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
     public ResponseEntity<ApiResponse<VietQrResponse>> vietQrByOrder(
             @PathVariable Integer orderId,
             @RequestParam(required = false) String phone,
-            @RequestParam(defaultValue = "0") Integer pointsToUse) {
-        VietQrResponse response = paymentService.createVietQr(orderId, phone, pointsToUse);
-        return ResponseEntity.ok(ApiResponse.success("Tạo VietQR cho đơn hàng thành công", response));
+            @RequestParam(defaultValue = "0") Integer pointsToUse,
+            Principal principal) {
+        String username = principal != null ? principal.getName() : null;
+        VietQrResponse response = paymentService.createPayOsVietQr(orderId, phone, pointsToUse, username);
+        return ResponseEntity.ok(ApiResponse.success("Tạo VietQR payOS cho đơn hàng thành công", response));
+    }
+
+    /**
+     * Webhook công khai cho payOS. Không dùng JWT vì payOS gọi trực tiếp từ máy
+     * chủ của họ; độ tin cậy được xác minh bằng HMAC-SHA256 checksum key.
+     */
+    @PostMapping("/payos/webhook")
+    public ResponseEntity<PayOsWebhookResponse> payOsWebhook(@RequestBody JsonNode body) {
+        return ResponseEntity.ok(paymentService.handlePayOsWebhook(body));
+    }
+
+    /** Đăng ký/cập nhật webhook payOS sau khi backend đã có URL HTTPS công khai. */
+    @PostMapping("/payos/register-webhook")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<JsonNode>> registerPayOsWebhook() {
+        JsonNode response = paymentService.registerPayOsWebhook();
+        return ResponseEntity.ok(ApiResponse.success("Đăng ký webhook payOS thành công", response));
     }
 
     /**
