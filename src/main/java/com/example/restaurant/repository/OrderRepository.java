@@ -84,6 +84,14 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
                         Integer maBan,
                         Collection<String> trangThai);
 
+        /**
+         * Các đơn đang mở của toàn bộ bàn vật lý trong một nhóm ghép. Dùng cho
+         * phiên QR chung để khách quét QR của bất kỳ bàn nào cũng nhìn thấy cùng dữ liệu.
+         */
+        List<Order> findByBanAn_MaBanInAndTrangThaiInOrderByThoiGianDatAscMaDonHangAsc(
+                        Collection<Integer> maBan,
+                        Collection<String> trangThai);
+
         List<Order> findByMaNhomThanhToanAndTrangThaiInOrderByThoiGianDatAscMaDonHangAsc(
                         String maNhomThanhToan,
                         Collection<String> trangThai);

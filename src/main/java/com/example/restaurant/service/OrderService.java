@@ -383,22 +383,19 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public List<Order> findOpenOrdersByTable(Integer tableId) {
-        Integer effectiveTableId = tableArrangementService.resolvePrimaryTableId(tableId);
-        return orderRepository.findByBanAn_MaBanAndTrangThaiInOrderByThoiGianDatDescMaDonHangDesc(
-                effectiveTableId,
-                OPEN_ORDER_STATUSES
-        );
+        // Với bàn ghép, mọi QR phải nhìn thấy cùng một phiên phục vụ thay vì chỉ
+        // đơn gốc của bàn vật lý đã quét. Bàn độc lập vẫn trả dữ liệu như cũ.
+        return tableArrangementService.findServiceGroupOpenOrders(tableId);
     }
 
     @Transactional(readOnly = true)
     public Order findCurrentOrderByTable(Integer tableId) {
-        Integer effectiveTableId = tableArrangementService.resolvePrimaryTableId(tableId);
-        return orderRepository.findOpenOrders(effectiveTableId, OPEN_ORDER_STATUSES, PageRequest.of(0, 1))
+        return tableArrangementService.findServiceGroupOpenOrders(tableId)
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
-                        "Bàn chưa có đơn hàng đang phục vụ: " + tableId
+                        "Bàn hoặc nhóm bàn chưa có đơn hàng đang phục vụ: " + tableId
                 ));
     }
 
@@ -1772,10 +1769,12 @@ public class OrderService {
         }
 
         String qrToken = request.qrToken().trim();
-        DiningTable selectedTable = diningTableRepository.findByQrTokenForUpdate(qrToken)
+        DiningTable selectedTable = diningTableRepository.findByQrToken(qrToken)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Mã QR không hợp lệ"));
         validateCustomerQrCanOrder(selectedTable);
-        return tableArrangementService.resolvePrimaryTableForUpdate(selectedTable);
+        // Sau khi ghép bàn, QR của bất kỳ bàn nào trong nhóm đều gọi thêm vào
+        // đơn của bàn chính. Các đơn cũ trước khi ghép vẫn được giữ để truy vết.
+        return tableArrangementService.resolveSharedQrOrderTableForUpdate(selectedTable);
     }
 
     private void ensureCustomerQrOwnsOrder(String qrToken, Order order) {

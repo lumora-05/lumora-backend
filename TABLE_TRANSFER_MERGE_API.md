@@ -9,7 +9,10 @@
 - Không cho ghép khi một trong các đơn đã vào `CHO_THANH_TOAN` / `SAN_SANG_THANH_TOAN`; phải ghép trước khi bắt đầu thanh toán.
 - Khi ghép các bàn đều đang phục vụ, bàn chính phải là bàn đang có đơn.
 - Các đơn gốc và chi tiết món được giữ nguyên. Backend chỉ gán chung `ma_nhom_thanh_toan`, vì vậy trạng thái bếp, hủy món và lịch sử món không bị mất.
-- Bàn phụ đã có đơn trước khi ghép tiếp tục gọi thêm món vào đơn của chính bàn đó. Bàn phụ vốn trống vẫn dùng đơn của bàn chính như luồng cũ.
+- Các đơn đã tồn tại trước lúc ghép vẫn giữ nguyên theo từng bàn để bảo toàn lịch sử món và trạng thái bếp.
+- **QR sau khi ghép là một phiên chung:** quét QR của bất kỳ bàn nào trong nhóm đều lấy toàn bộ các đơn đang mở của nhóm.
+- Các lượt **gọi thêm từ QR sau khi ghép** được quy về đơn của bàn chính. QR bàn phụ không bị vô hiệu hóa và khách không cần chuyển sang quét QR bàn chính.
+- Thao tác nội bộ của nhân viên trên các đơn gốc vẫn giữ tương thích với luồng cũ; bill cuối cùng vẫn tổng hợp theo `ma_nhom_thanh_toan`.
 
 ## Thanh toán chung
 
@@ -59,3 +62,16 @@ Response giữ cấu trúc cũ. Payload realtime có thêm:
 - `tenBanThanhToanChung`: ví dụ `Bàn 08 + Bàn 09`.
 
 Các trường cũ vẫn giữ nguyên để frontend hiện tại không bị phá vỡ.
+## QR của nhóm bàn ghép
+
+Ví dụ Bàn 07 có đơn `#218`, Bàn 08 có đơn `#219`, sau đó ghép Bàn 07 làm bàn chính:
+
+1. `QR07` và `QR08` đều tiếp tục hoạt động.
+2. `GET /api/customer/qr/{qrToken}/orders` từ QR nào cũng trả cùng danh sách đơn đang mở của nhóm (`#218`, `#219`).
+3. `GET /api/customer/qr/{qrToken}/orders/current` từ QR nào cũng trả đơn neo của bàn chính (`#218`).
+4. Món đã tồn tại trong `#219` không bị di chuyển hoặc xóa.
+5. Món khách gọi thêm sau khi ghép từ `QR07` hoặc `QR08` đều được thêm vào đơn đang mở của bàn chính `#218`.
+6. Thay đổi ở một đơn trong nhóm phát realtime tới topic của mọi bàn/mọi đơn trong nhóm để các QR đang mở cùng tải lại dữ liệu.
+7. Khi thanh toán, `#218` và `#219` vẫn được tổng hợp thành một bill chung như trước.
+
+Nguyên tắc: **QR xác định quyền truy cập vào phiên bàn ghép; bàn chính xác định đơn nhận lượt gọi thêm; `ma_nhom_thanh_toan` xác định bill chung.**

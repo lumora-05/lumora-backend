@@ -373,8 +373,8 @@ public class TableArrangementService {
     }
 
     /**
-     * API đọc đơn tại bàn phụ vẫn đọc đơn riêng nếu bàn đó đã có đơn trước khi ghép;
-     * nếu bàn phụ vốn trống thì tiếp tục dùng đơn của bàn chính như nghiệp vụ cũ.
+     * Giữ quy tắc cũ cho thao tác của nhân viên: nếu bàn phụ đã có đơn riêng trước
+     * khi ghép thì nhân viên vẫn có thể tiếp tục thao tác đúng đơn gốc của bàn đó.
      */
     @Transactional(readOnly = true)
     public Integer resolvePrimaryTableId(Integer selectedTableId) {
@@ -393,6 +393,96 @@ public class TableArrangementService {
                 PageRequest.of(0, 1)
         ).isEmpty();
         return hasOwnOpenOrder ? selected.getMaBan() : primaryId;
+    }
+
+    /**
+     * Phiên QR sau khi ghép dùng bàn chính làm nơi nhận các lượt gọi món mới.
+     * Các đơn đã tồn tại trước lúc ghép vẫn được giữ nguyên để bảo toàn lịch sử;
+     * chỉ những lượt gọi thêm từ QR sau khi ghép mới quy về đơn của bàn chính.
+     */
+    @Transactional
+    public DiningTable resolveSharedQrOrderTableForUpdate(DiningTable scannedTable) {
+        if (scannedTable == null || scannedTable.getMaBan() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Không xác định được bàn ăn");
+        }
+
+        // Chỉ khóa bàn thực sự nhận lượt gọi món. Với nhóm ghép, mọi QR cùng khóa
+        // bàn chính nên hai request đồng thời không tạo hai đơn mới và cũng tránh
+        // khóa chéo bàn phụ -> bàn chính gây deadlock.
+        if (!StringUtils.hasText(scannedTable.getMaNhomBan())) {
+            return diningTableRepository.findByIdForUpdate(scannedTable.getMaBan())
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Không tìm thấy bàn ăn: " + scannedTable.getMaBan()
+                    ));
+        }
+
+        Integer primaryId = scannedTable.getMaBanChinh();
+        if (primaryId == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Nhóm bàn chưa xác định được bàn chính"
+            );
+        }
+        DiningTable primary = diningTableRepository.findByIdForUpdate(primaryId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Nhóm bàn không còn bàn chính hợp lệ"
+                ));
+        if (!StringUtils.hasText(primary.getMaNhomBan())
+                || !scannedTable.getMaNhomBan().equals(primary.getMaNhomBan())
+                || primary.getMaBanChinh() == null
+                || !primaryId.equals(primary.getMaBanChinh())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Nhóm bàn vừa thay đổi. Vui lòng tải lại mã QR và thử lại"
+            );
+        }
+        return primary;
+    }
+
+    /**
+     * Trả cùng một danh sách đơn đang mở cho mọi QR thuộc một nhóm ghép.
+     * Danh sách ưu tiên đơn của bàn chính, sau đó theo thời điểm tạo đơn.
+     */
+    @Transactional(readOnly = true)
+    public List<Order> findServiceGroupOpenOrders(Integer selectedTableId) {
+        DiningTable selected = diningTableRepository.findById(selectedTableId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Không tìm thấy bàn ăn: " + selectedTableId
+                ));
+
+        if (!StringUtils.hasText(selected.getMaNhomBan())) {
+            return orderRepository.findByBanAn_MaBanAndTrangThaiInOrderByThoiGianDatDescMaDonHangDesc(
+                    selected.getMaBan(),
+                    OPEN_ORDER_STATUSES
+            );
+        }
+
+        List<DiningTable> groupTables = diningTableRepository
+                .findByMaNhomBanOrderByMaBanAsc(selected.getMaNhomBan());
+        if (groupTables.isEmpty()) {
+            return List.of();
+        }
+        List<Integer> tableIds = groupTables.stream().map(DiningTable::getMaBan).toList();
+        List<Order> orders = orderRepository
+                .findByBanAn_MaBanInAndTrangThaiInOrderByThoiGianDatAscMaDonHangAsc(
+                        tableIds,
+                        OPEN_ORDER_STATUSES
+                );
+        if (orders.isEmpty()) {
+            return List.of();
+        }
+
+        Integer primaryId = selected.getMaBanChinh();
+        return orders.stream()
+                .sorted(Comparator
+                        .comparing((Order order) -> order.getBanAn() == null || primaryId == null
+                                || !primaryId.equals(order.getBanAn().getMaBan()))
+                        .thenComparing(Order::getThoiGianDat, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(Order::getMaDonHang, Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
     }
 
     /** Đồng bộ trạng thái cho toàn bộ nhóm bàn; bàn độc lập vẫn hoạt động như cũ. */

@@ -5,6 +5,8 @@ import com.example.restaurant.entity.Order;
 import com.example.restaurant.entity.OrderItem;
 import com.example.restaurant.entity.ServiceRequest;
 import com.example.restaurant.entity.TableReservation;
+import com.example.restaurant.repository.DiningTableRepository;
+import com.example.restaurant.repository.OrderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -13,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,11 +30,17 @@ public class RealtimeNotificationService {
 
     private final SimpMessagingTemplate messagingTemplate;
     private final FirebasePushNotificationService firebasePushNotificationService;
+    private final OrderRepository orderRepository;
+    private final DiningTableRepository diningTableRepository;
 
     public RealtimeNotificationService(SimpMessagingTemplate messagingTemplate,
-                                       FirebasePushNotificationService firebasePushNotificationService) {
+                                       FirebasePushNotificationService firebasePushNotificationService,
+                                       OrderRepository orderRepository,
+                                       DiningTableRepository diningTableRepository) {
         this.messagingTemplate = messagingTemplate;
         this.firebasePushNotificationService = firebasePushNotificationService;
+        this.orderRepository = orderRepository;
+        this.diningTableRepository = diningTableRepository;
     }
 
     public void notifyNewOrder(Object data) {
@@ -324,20 +333,56 @@ public class RealtimeNotificationService {
         if (order == null || order.getMaDonHang() == null) {
             return;
         }
-        send(
-                "/topic/customer/orders/" + order.getMaDonHang(),
-                "CUSTOMER_ORDER_UPDATED",
-                "Đơn hàng của khách đã được cập nhật",
-                order
-        );
+
+        // Bàn ghép là một phiên QR chung: thay đổi ở một đơn phải đánh thức mọi
+        // màn hình đang mở bằng QR của các bàn trong nhóm để chúng tải lại cùng dữ liệu.
+        LinkedHashSet<Integer> orderIds = new LinkedHashSet<>();
+        LinkedHashSet<Integer> tableIds = new LinkedHashSet<>();
+        orderIds.add(order.getMaDonHang());
         if (order.getBanAn() != null && order.getBanAn().getMaBan() != null) {
+            tableIds.add(order.getBanAn().getMaBan());
+        }
+
+        String groupId = order.getMaNhomThanhToan();
+        if ((groupId == null || groupId.isBlank())
+                && order.getBanAn() != null
+                && order.getBanAn().getMaNhomBan() != null
+                && !order.getBanAn().getMaNhomBan().isBlank()) {
+            groupId = order.getBanAn().getMaNhomBan();
+        }
+        if (groupId != null && !groupId.isBlank()) {
+            orderRepository.findByMaNhomThanhToanOrderByThoiGianDatAscMaDonHangAsc(groupId)
+                    .forEach(groupOrder -> {
+                        if (groupOrder.getMaDonHang() != null) {
+                            orderIds.add(groupOrder.getMaDonHang());
+                        }
+                        if (groupOrder.getBanAn() != null && groupOrder.getBanAn().getMaBan() != null) {
+                            tableIds.add(groupOrder.getBanAn().getMaBan());
+                        }
+                    });
+            diningTableRepository.findByMaNhomBanOrderByMaBanAsc(groupId).stream()
+                    .map(table -> table.getMaBan())
+                    .filter(java.util.Objects::nonNull)
+                    .forEach(tableIds::add);
+        }
+
+        for (Integer orderId : orderIds) {
             send(
-                    "/topic/customer/tables/" + order.getBanAn().getMaBan(),
-                    "CUSTOMER_TABLE_ORDER_UPDATED",
-                    "Đơn hàng tại bàn đã được cập nhật",
+                    "/topic/customer/orders/" + orderId,
+                    "CUSTOMER_ORDER_UPDATED",
+                    "Đơn hàng hoặc nhóm bàn của khách đã được cập nhật",
                     order
             );
         }
+        for (Integer tableId : tableIds) {
+            send(
+                    "/topic/customer/tables/" + tableId,
+                    "CUSTOMER_TABLE_ORDER_UPDATED",
+                    "Phiên phục vụ tại bàn đã được cập nhật",
+                    order
+            );
+        }
+
         if (order.getGiaoHang() != null
                 && order.getGiaoHang().getTrackingToken() != null
                 && !order.getGiaoHang().getTrackingToken().isBlank()) {
