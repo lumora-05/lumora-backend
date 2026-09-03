@@ -84,6 +84,22 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
                         Integer maBan,
                         Collection<String> trangThai);
 
+        List<Order> findByMaNhomThanhToanAndTrangThaiInOrderByThoiGianDatAscMaDonHangAsc(
+                        String maNhomThanhToan,
+                        Collection<String> trangThai);
+
+        List<Order> findByMaNhomThanhToanOrderByThoiGianDatAscMaDonHangAsc(String maNhomThanhToan);
+
+        @Lock(LockModeType.PESSIMISTIC_WRITE)
+        @Query("""
+                        select o from Order o
+                        where o.maNhomThanhToan = :groupId
+                          and o.trangThai in :statuses
+                        order by o.thoiGianDat asc, o.maDonHang asc
+                        """)
+        List<Order> findBillingGroupOrdersForUpdate(@Param("groupId") String groupId,
+                        @Param("statuses") Collection<String> statuses);
+
         boolean existsByBanAn_MaBanAndTrangThaiInAndMaDonHangNot(
                         Integer maBan,
                         Collection<String> trangThai,

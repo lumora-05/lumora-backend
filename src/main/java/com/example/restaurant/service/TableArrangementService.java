@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -154,8 +155,10 @@ public class TableArrangementService {
     }
 
     /**
-     * Ghép nhiều bàn thành một nhóm dùng chung một đơn. Bàn chính có thể đang có
-     * một đơn mở; các bàn ghép bắt buộc phải trống và chưa có đơn mở.
+     * Ghép nhiều bàn thành một nhóm phục vụ. Ngoài trường hợp ghép thêm bàn trống,
+     * hệ thống cho phép ghép các bàn đang có đúng một đơn mở để tính chung một bill.
+     * Các đơn gốc vẫn được giữ nguyên cho bếp/lịch sử; chúng được liên kết bằng
+     * maNhomThanhToan và sẽ được thanh toán cùng lúc.
      */
     @Transactional
     public TableArrangementResponse merge(TableMergeRequest request,
@@ -193,45 +196,55 @@ public class TableArrangementService {
         ensureSameArea(allTables);
         ensureActorCanAccessTables(username, admin, allTables);
 
-        List<Order> primaryOrders = openOrdersForUpdate(primary.getMaBan());
-        if (primaryOrders.size() > 1) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Bàn chính đang có nhiều đơn mở. Vui lòng xử lý dữ liệu trùng trước khi ghép bàn"
-            );
+        Map<Integer, List<Order>> ordersByTable = new LinkedHashMap<>();
+        for (DiningTable table : allTables) {
+            List<Order> orders = openOrdersForUpdate(table.getMaBan());
+            if (orders.size() > 1) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        table.getTenBan() + " đang có nhiều đơn mở. Vui lòng xử lý dữ liệu trùng trước khi ghép bàn"
+                );
+            }
+            ordersByTable.put(table.getMaBan(), orders);
         }
+
+        List<Order> primaryOrders = ordersByTable.get(primary.getMaBan());
         Order activeOrder = primaryOrders.isEmpty() ? null : primaryOrders.get(0);
-        if (activeOrder == null && !"TRONG".equals(normalize(primary.getTrangThai()))) {
+        boolean anyTableHasOrder = ordersByTable.values().stream().anyMatch(orders -> !orders.isEmpty());
+        if (anyTableHasOrder && activeOrder == null) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Bàn chính phải đang trống hoặc đang có đúng một đơn phục vụ"
+                    "Khi ghép các bàn đang phục vụ, bàn chính phải là bàn đang có đơn hàng"
             );
         }
 
-        if (activeOrder == null) {
-            reservationService.ensureTableAvailableForNewService(primary);
-        }
+        List<Order> activeOrders = new ArrayList<>();
         for (DiningTable table : allTables) {
-            if (table.getMaBan().equals(primary.getMaBan())) {
+            List<Order> orders = ordersByTable.get(table.getMaBan());
+            if (orders.isEmpty()) {
+                if (!"TRONG".equals(normalize(table.getTrangThai()))) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            table.getTenBan() + " không có đơn nhưng cũng không ở trạng thái trống"
+                    );
+                }
+                reservationService.ensureTableAvailableForNewService(table);
                 continue;
             }
-            if (!"TRONG".equals(normalize(table.getTrangThai()))) {
+
+            Order tableOrder = orders.get(0);
+            String orderStatus = normalize(tableOrder.getTrangThai());
+            if (PAYMENT_PENDING_STATUSES.contains(orderStatus)) {
                 throw new ResponseStatusException(
                         HttpStatus.CONFLICT,
-                        table.getTenBan() + " không ở trạng thái trống"
+                        table.getTenBan() + " đang chờ thanh toán nên không thể ghép thêm. Vui lòng xử lý thanh toán trước"
                 );
             }
-            if (!openOrdersForUpdate(table.getMaBan()).isEmpty()) {
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        table.getTenBan() + " đang có đơn hàng đang phục vụ"
-                );
-            }
-            reservationService.ensureTableAvailableForNewService(table);
+            activeOrders.add(tableOrder);
         }
 
         String groupId = UUID.randomUUID().toString();
-        String groupStatus = activeOrder == null ? "TRONG" : resolveOccupiedTableStatus(activeOrder);
+        String groupStatus = activeOrder == null ? "TRONG" : "DANG_SU_DUNG";
         for (DiningTable table : allTables) {
             table.setMaNhomBan(groupId);
             table.setMaBanChinh(primary.getMaBan());
@@ -239,18 +252,31 @@ public class TableArrangementService {
         }
         diningTableRepository.saveAllAndFlush(allTables);
 
+        // Giữ nguyên từng đơn và từng món của từng bàn, chỉ liên kết để thanh toán chung.
+        // Nhờ vậy bếp/lịch sử món không bị mất khi ghép hai bàn đang ăn.
+        for (Order order : activeOrders) {
+            order.setMaNhomThanhToan(groupId);
+        }
+        if (!activeOrders.isEmpty()) {
+            orderRepository.saveAllAndFlush(activeOrders);
+        }
+
         String joinedNames = allTables.stream()
                 .map(DiningTable::getTenBan)
                 .toList()
                 .toString();
-        String message = "Đã ghép các bàn " + joinedNames + " với bàn chính " + primary.getTenBan();
+        String message = activeOrders.size() > 1
+                ? "Đã ghép các bàn " + joinedNames + " để thanh toán chung tại " + primary.getTenBan()
+                : "Đã ghép các bàn " + joinedNames + " với bàn chính " + primary.getTenBan();
         systemActivityService.record(
-                "TABLES_MERGED",
+                activeOrders.size() > 1 ? "TABLES_MERGED_FOR_SHARED_BILL" : "TABLES_MERGED",
                 message,
                 activeOrder == null ? primary.getMaBan() : activeOrder.getMaDonHang()
         );
 
         Map<String, Object> payload = buildGroupPayload(groupId, primary, allTables, activeOrder);
+        payload.put("maDonHangs", activeOrders.stream().map(Order::getMaDonHang).toList());
+        payload.put("thanhToanChung", activeOrders.size() > 1);
         realtimeNotificationService.notifyTableArrangementChanged(
                 "TABLES_MERGED",
                 message,
@@ -323,7 +349,10 @@ public class TableArrangementService {
         );
     }
 
-    /** Trả về bàn chính của nhóm và khóa bản ghi để tạo/gọi thêm món an toàn. */
+    /**
+     * Chọn bàn thực tế để tạo/gọi thêm món. Nếu bàn phụ đã có đơn riêng từ trước
+     * khi ghép thì tiếp tục gọi món vào đơn đó; bàn phụ trống vẫn dùng đơn bàn chính.
+     */
     @Transactional
     public DiningTable resolvePrimaryTableForUpdate(DiningTable selectedTable) {
         if (selectedTable == null || selectedTable.getMaBan() == null) {
@@ -333,6 +362,9 @@ public class TableArrangementService {
         if (primaryId == null || primaryId.equals(selectedTable.getMaBan())) {
             return selectedTable;
         }
+        if (!openOrdersForUpdate(selectedTable.getMaBan()).isEmpty()) {
+            return selectedTable;
+        }
         return diningTableRepository.findByIdForUpdate(primaryId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.CONFLICT,
@@ -340,7 +372,10 @@ public class TableArrangementService {
                 ));
     }
 
-    /** Dùng cho các API đọc đơn hiện tại bằng QR của bàn phụ. */
+    /**
+     * API đọc đơn tại bàn phụ vẫn đọc đơn riêng nếu bàn đó đã có đơn trước khi ghép;
+     * nếu bàn phụ vốn trống thì tiếp tục dùng đơn của bàn chính như nghiệp vụ cũ.
+     */
     @Transactional(readOnly = true)
     public Integer resolvePrimaryTableId(Integer selectedTableId) {
         DiningTable selected = diningTableRepository.findById(selectedTableId)
@@ -348,7 +383,16 @@ public class TableArrangementService {
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy bàn ăn: " + selectedTableId
                 ));
-        return selected.getMaBanChinh() == null ? selected.getMaBan() : selected.getMaBanChinh();
+        Integer primaryId = selected.getMaBanChinh();
+        if (primaryId == null || primaryId.equals(selected.getMaBan())) {
+            return selected.getMaBan();
+        }
+        boolean hasOwnOpenOrder = !orderRepository.findOpenOrders(
+                selected.getMaBan(),
+                OPEN_ORDER_STATUSES,
+                PageRequest.of(0, 1)
+        ).isEmpty();
+        return hasOwnOpenOrder ? selected.getMaBan() : primaryId;
     }
 
     /** Đồng bộ trạng thái cho toàn bộ nhóm bàn; bàn độc lập vẫn hoạt động như cũ. */
@@ -364,8 +408,9 @@ public class TableArrangementService {
     }
 
     /**
-     * Giải phóng bàn sau khi đơn cuối cùng kết thúc. Nếu là nhóm ghép thì tự tách
-     * nhóm và đưa toàn bộ bàn về trạng thái trống.
+     * Giải phóng bàn sau khi đơn cuối cùng của cả nhóm kết thúc. Với nhóm có nhiều
+     * đơn (hai bàn đang ăn ghép để thanh toán chung), một đơn hủy/kết thúc trước
+     * không được làm tách cả nhóm khi các đơn còn lại vẫn đang phục vụ.
      */
     @Transactional
     public void releaseAfterTerminalOrder(DiningTable primaryTable) {
@@ -373,7 +418,26 @@ public class TableArrangementService {
             return;
         }
         String previousGroupId = primaryTable.getMaNhomBan();
+        Integer primaryIdBeforeClear = primaryTable.getMaBanChinh() != null
+                ? primaryTable.getMaBanChinh()
+                : primaryTable.getMaBan();
         List<DiningTable> tables = findGroupOrSingle(primaryTable);
+
+        List<Order> remainingOpenOrders = new ArrayList<>();
+        for (DiningTable table : tables) {
+            remainingOpenOrders.addAll(openOrdersForUpdate(table.getMaBan()));
+        }
+        if (!remainingOpenOrders.isEmpty()) {
+            boolean anyWaitingPayment = remainingOpenOrders.stream()
+                    .map(Order::getTrangThai)
+                    .map(this::normalize)
+                    .anyMatch(PAYMENT_PENDING_STATUSES::contains);
+            String status = anyWaitingPayment ? "DANG_THANH_TOAN" : "DANG_SU_DUNG";
+            tables.forEach(table -> table.setTrangThai(status));
+            diningTableRepository.saveAll(tables);
+            return;
+        }
+
         List<Integer> tableIds = tables.stream().map(DiningTable::getMaBan).toList();
         serviceRequestService.cancelOpenRequestsForTables(
                 tableIds,
@@ -385,15 +449,129 @@ public class TableArrangementService {
         if (StringUtils.hasText(previousGroupId) && tables.size() > 1) {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("maNhomBan", previousGroupId);
-            payload.put("maBanChinh", primaryTable.getMaBan());
+            payload.put("maBanChinh", primaryIdBeforeClear);
             payload.put("maCacBan", tableIds);
             realtimeNotificationService.notifyTableArrangementChanged(
                     "TABLES_UNMERGED",
-                    "Nhóm bàn đã được tự động tách sau khi đơn kết thúc",
+                    "Nhóm bàn đã được tự động tách sau khi bill chung kết thúc",
                     payload,
                     tableIds
             );
         }
+    }
+
+    /**
+     * Danh sách các đơn mở cùng bill với đơn neo. Dùng cho yêu cầu thanh toán và
+     * thanh toán chung; đơn độc lập vẫn trả về đúng một phần tử.
+     */
+    @Transactional(readOnly = true)
+    public List<Order> findBillingOrders(Order anchorOrder) {
+        if (anchorOrder == null || anchorOrder.getMaDonHang() == null) {
+            return List.of();
+        }
+        String groupId = billingGroupId(anchorOrder);
+        if (!StringUtils.hasText(groupId)) {
+            return List.of(anchorOrder);
+        }
+        List<Order> orders = orderRepository
+                .findByMaNhomThanhToanAndTrangThaiInOrderByThoiGianDatAscMaDonHangAsc(groupId, OPEN_ORDER_STATUSES);
+        if (orders.isEmpty()) {
+            return List.of(anchorOrder);
+        }
+        return sortBillingOrders(orders, anchorOrder);
+    }
+
+    /** Khóa toàn bộ các đơn đang mở thuộc cùng bill để tránh thanh toán song song. */
+    @Transactional
+    public List<Order> findBillingOrdersForUpdate(Order anchorOrder) {
+        if (anchorOrder == null || anchorOrder.getMaDonHang() == null) {
+            return List.of();
+        }
+        String groupId = billingGroupId(anchorOrder);
+        if (!StringUtils.hasText(groupId)) {
+            Order locked = orderRepository.findByIdForUpdate(anchorOrder.getMaDonHang())
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Không tìm thấy đơn hàng: " + anchorOrder.getMaDonHang()
+                    ));
+            return List.of(locked);
+        }
+        List<Order> orders = orderRepository.findBillingGroupOrdersForUpdate(groupId, OPEN_ORDER_STATUSES);
+        if (orders.isEmpty()) {
+            Order locked = orderRepository.findByIdForUpdate(anchorOrder.getMaDonHang())
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Không tìm thấy đơn hàng: " + anchorOrder.getMaDonHang()
+                    ));
+            return List.of(locked);
+        }
+        return sortBillingOrders(orders, anchorOrder);
+    }
+
+    /** Đơn của bàn chính là đơn neo của hóa đơn chung. */
+    public Order resolveBillingPrimaryOrder(List<Order> orders, Order fallback) {
+        if (orders == null || orders.isEmpty()) {
+            return fallback;
+        }
+        Integer primaryTableId = fallback != null && fallback.getBanAn() != null
+                ? fallback.getBanAn().getMaBanChinh()
+                : null;
+        if (primaryTableId == null && fallback != null && fallback.getBanAn() != null) {
+            primaryTableId = fallback.getBanAn().getMaBan();
+        }
+        final Integer expected = primaryTableId;
+        return orders.stream()
+                .filter(order -> order.getBanAn() != null && expected != null
+                        && expected.equals(order.getBanAn().getMaBan()))
+                .findFirst()
+                .orElse(orders.get(0));
+    }
+
+    /** QR của các bàn trong cùng nhóm được xem là cùng phiên phục vụ. */
+    public boolean isSameServiceGroup(DiningTable first, DiningTable second) {
+        if (first == null || second == null || first.getMaBan() == null || second.getMaBan() == null) {
+            return false;
+        }
+        if (first.getMaBan().equals(second.getMaBan())) {
+            return true;
+        }
+        return StringUtils.hasText(first.getMaNhomBan())
+                && first.getMaNhomBan().equals(second.getMaNhomBan());
+    }
+
+    /** Các bàn vật lý của cùng nhóm, dùng để hiển thị tên bill chung. */
+    @Transactional(readOnly = true)
+    public List<DiningTable> findServiceGroupTables(DiningTable table) {
+        return findGroupOrSingle(table);
+    }
+
+    private String billingGroupId(Order order) {
+        if (order == null) {
+            return null;
+        }
+        if (StringUtils.hasText(order.getMaNhomThanhToan())) {
+            return order.getMaNhomThanhToan();
+        }
+        return order.getBanAn() != null && StringUtils.hasText(order.getBanAn().getMaNhomBan())
+                ? order.getBanAn().getMaNhomBan()
+                : null;
+    }
+
+    private List<Order> sortBillingOrders(List<Order> orders, Order fallback) {
+        Integer primaryTableId = fallback != null && fallback.getBanAn() != null
+                ? fallback.getBanAn().getMaBanChinh()
+                : null;
+        if (primaryTableId == null && fallback != null && fallback.getBanAn() != null) {
+            primaryTableId = fallback.getBanAn().getMaBan();
+        }
+        final Integer expected = primaryTableId;
+        return orders.stream()
+                .sorted(Comparator
+                        .comparing((Order order) -> order.getBanAn() == null || expected == null
+                                || !expected.equals(order.getBanAn().getMaBan()))
+                        .thenComparing(Order::getThoiGianDat, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(Order::getMaDonHang, Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
     }
 
     private Map<Integer, DiningTable> lockTables(Collection<Integer> ids) {

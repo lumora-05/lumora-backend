@@ -13,3 +13,10 @@ CREATE INDEX IF NOT EXISTS idx_ban_an_ma_nhom_ban
 
 CREATE INDEX IF NOT EXISTS idx_ban_an_ma_ban_chinh
     ON ban_an (ma_ban_chinh);
+
+-- Liên kết các đơn của nhiều bàn đang phục vụ để tính chung một bill.
+ALTER TABLE don_hang
+    ADD COLUMN IF NOT EXISTS ma_nhom_thanh_toan VARCHAR(64);
+
+CREATE INDEX IF NOT EXISTS idx_don_hang_ma_nhom_thanh_toan
+    ON don_hang (ma_nhom_thanh_toan);

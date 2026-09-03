@@ -7,6 +7,8 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Getter
 @Setter
@@ -87,6 +89,19 @@ public class Invoice {
 
     @Column(name = "noi_dung_chuyen_khoan", length = 50)
     private String noiDungChuyenKhoan;
+
+    /**
+     * Dữ liệu chỉ để trả API cho hóa đơn chung; không tạo thêm bảng/cột DB.
+     * Frontend có thể dùng danh sách này để in đầy đủ món của tất cả bàn đã ghép.
+     */
+    @Transient
+    private List<OrderItem> chiTietThanhToanChung = new ArrayList<>();
+
+    @Transient
+    private List<Integer> maDonHangsThanhToanChung = new ArrayList<>();
+
+    @Transient
+    private String tenBanThanhToanChung;
 
     @PrePersist
     void prePersist() {

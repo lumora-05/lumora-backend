@@ -451,6 +451,7 @@ public class OrderService {
             reservationService.ensureNoPendingPreorderForAssignedReservation(table);
             order = new Order();
             order.setBanAn(table);
+            order.setMaNhomThanhToan(StringUtils.hasText(table.getMaNhomBan()) ? table.getMaNhomBan() : null);
             order.setGhiChu(trimToNull(request.ghiChu()));
             // Đơn do khách quét QR hoặc phục vụ tạo đều được chuyển thẳng xuống bếp.
             // Giữ trạng thái DA_XAC_NHAN để tương thích với luồng bếp và frontend hiện tại.
@@ -656,41 +657,14 @@ public class OrderService {
      */
     @Transactional
     public Order requestPaymentByCustomer(String qrToken, Integer orderId) {
-        Order order = orderRepository.findByIdForUpdate(orderId)
+        Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy đơn hàng: " + orderId
                 ));
         ensureCustomerQrOwnsOrder(qrToken, order);
-        String currentStatus = normalizeStatus(order.getTrangThai());
-
-        // Cho phép gọi lặp lại an toàn khi request trước đã được xử lý thành công.
-        if (PAYMENT_PENDING_STATUSES.contains(currentStatus)) {
-            return order;
-        }
-
-        if (!"DA_PHUC_VU".equals(currentStatus)) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Chỉ có thể yêu cầu thanh toán sau khi đơn hàng đã được phục vụ"
-            );
-        }
-
-        syncOrderTimestamps(order, currentStatus, "CHO_THANH_TOAN");
-        order.setTrangThai("CHO_THANH_TOAN");
-        syncTableStatusAfterOrderStatus(order, "CHO_THANH_TOAN");
-        Order savedOrder = orderRepository.saveAndFlush(order);
-
-        systemActivityService.record(
-                "CUSTOMER_PAYMENT_REQUESTED",
-                "Khách tại " + savedOrder.getBanAn().getTenBan()
-                        + " đã yêu cầu thanh toán đơn #DH" + savedOrder.getMaDonHang(),
-                savedOrder.getMaDonHang()
-        );
-        realtimeNotificationService.notifyOrderStatusChanged(savedOrder);
-        realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
-        realtimeNotificationService.notifyDashboardRefresh(savedOrder);
-        return savedOrder;
+        List<Order> billingOrders = tableArrangementService.findBillingOrdersForUpdate(order);
+        return requestPaymentForBillingGroup(order, billingOrders, "CUSTOMER_PAYMENT_REQUESTED", null);
     }
 
     /** Khách chỉ được áp dụng khuyến mãi cho đơn thuộc đúng bàn của QR hiện tại. */
@@ -723,7 +697,7 @@ public class OrderService {
      */
     @Transactional
     public Order requestPaymentByWaiter(Integer orderId, String username) {
-        Order order = orderRepository.findByIdForUpdate(orderId)
+        Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy đơn hàng: " + orderId
@@ -734,36 +708,75 @@ public class OrderService {
                     "Đơn giao hàng được thanh toán theo quy trình giao tận nơi"
             );
         }
-        ensureWaiterCanAccessOrder(resolveActiveWaiterByUsername(username), order);
-        String currentStatus = normalizeStatus(order.getTrangThai());
+        Employee waiter = resolveActiveWaiterByUsername(username);
+        ensureWaiterCanAccessOrder(waiter, order);
+        List<Order> billingOrders = tableArrangementService.findBillingOrdersForUpdate(order);
+        for (Order billingOrder : billingOrders) {
+            ensureWaiterCanAccessOrder(waiter, billingOrder);
+        }
+        return requestPaymentForBillingGroup(order, billingOrders, "WAITER_PAYMENT_REQUESTED", waiter);
+    }
 
-        if (PAYMENT_PENDING_STATUSES.contains(currentStatus)) {
-            return order;
+    private Order requestPaymentForBillingGroup(Order requestedOrder,
+                                                List<Order> billingOrders,
+                                                String activityType,
+                                                Employee waiter) {
+        List<Order> orders = billingOrders == null || billingOrders.isEmpty()
+                ? List.of(requestedOrder)
+                : billingOrders;
+
+        for (Order billingOrder : orders) {
+            String status = normalizeStatus(billingOrder.getTrangThai());
+            if (!"DA_PHUC_VU".equals(status) && !PAYMENT_PENDING_STATUSES.contains(status)) {
+                String tableName = billingOrder.getBanAn() == null
+                        ? "đơn #DH" + billingOrder.getMaDonHang()
+                        : billingOrder.getBanAn().getTenBan();
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        orders.size() > 1
+                                ? "Chưa thể thanh toán chung vì " + tableName + " chưa phục vụ xong"
+                                : "Chỉ có thể yêu cầu thanh toán sau khi đơn hàng đã được phục vụ"
+                );
+            }
         }
 
-        if (!"DA_PHUC_VU".equals(currentStatus)) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Chỉ có thể yêu cầu thanh toán sau khi đơn hàng đã được phục vụ"
-            );
+        LocalDateTime requestedAt = LocalDateTime.now();
+        for (Order billingOrder : orders) {
+            String currentStatus = normalizeStatus(billingOrder.getTrangThai());
+            if (!PAYMENT_PENDING_STATUSES.contains(currentStatus)) {
+                syncOrderTimestamps(billingOrder, currentStatus, "CHO_THANH_TOAN");
+                billingOrder.setThoiGianYeuCauThanhToan(requestedAt);
+                billingOrder.setTrangThai("CHO_THANH_TOAN");
+            }
+        }
+        orderRepository.saveAllAndFlush(orders);
+        if (requestedOrder.getBanAn() != null) {
+            tableArrangementService.updateServiceStatus(requestedOrder.getBanAn(), "DANG_THANH_TOAN");
         }
 
-        syncOrderTimestamps(order, currentStatus, "CHO_THANH_TOAN");
-        order.setTrangThai("CHO_THANH_TOAN");
-        syncTableStatusAfterOrderStatus(order, "CHO_THANH_TOAN");
-        Order savedOrder = orderRepository.saveAndFlush(order);
+        Order responseOrder = tableArrangementService.resolveBillingPrimaryOrder(orders, requestedOrder);
+        String tableLabel = orders.stream()
+                .map(Order::getBanAn)
+                .filter(Objects::nonNull)
+                .map(DiningTable::getTenBan)
+                .distinct()
+                .collect(java.util.stream.Collectors.joining(" + "));
+        String message = orders.size() > 1
+                ? (waiter == null ? "Khách" : "Nhân viên phục vụ")
+                    + " đã yêu cầu thanh toán chung " + tableLabel
+                    + " (" + orders.size() + " đơn)"
+                : (waiter == null
+                    ? "Khách tại " + tableLabel + " đã yêu cầu thanh toán đơn #DH" + responseOrder.getMaDonHang()
+                    : "Nhân viên phục vụ đã ghi nhận yêu cầu thanh toán tại " + tableLabel
+                        + " cho đơn #DH" + responseOrder.getMaDonHang());
 
-        systemActivityService.record(
-                "WAITER_PAYMENT_REQUESTED",
-                "Nhân viên phục vụ đã ghi nhận yêu cầu thanh toán tại "
-                        + savedOrder.getBanAn().getTenBan()
-                        + " cho đơn #DH" + savedOrder.getMaDonHang(),
-                savedOrder.getMaDonHang()
-        );
-        realtimeNotificationService.notifyOrderStatusChanged(savedOrder);
-        realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
-        realtimeNotificationService.notifyDashboardRefresh(savedOrder);
-        return savedOrder;
+        systemActivityService.record(activityType, message, responseOrder.getMaDonHang());
+        for (Order billingOrder : orders) {
+            realtimeNotificationService.notifyOrderStatusChanged(billingOrder);
+            realtimeNotificationService.notifyCustomerOrderChanged(billingOrder);
+        }
+        realtimeNotificationService.notifyDashboardRefresh(responseOrder);
+        return responseOrder;
     }
 
     /**
@@ -843,11 +856,10 @@ public class OrderService {
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy đơn hàng: " + orderId
                 ));
-        Integer effectiveTableId = tableArrangementService.resolvePrimaryTableId(scannedTable.getMaBan());
-        if (order.getBanAn() == null || !Objects.equals(order.getBanAn().getMaBan(), effectiveTableId)) {
+        if (order.getBanAn() == null || !tableArrangementService.isSameServiceGroup(scannedTable, order.getBanAn())) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
-                    "Đơn hàng không thuộc bàn của mã QR hiện tại"
+                    "Đơn hàng không thuộc bàn hoặc nhóm bàn của mã QR hiện tại"
             );
         }
 
@@ -1772,11 +1784,10 @@ public class OrderService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn hàng tại bàn");
         }
 
-        Integer effectiveTableId = tableArrangementService.resolvePrimaryTableId(scannedTable.getMaBan());
-        if (!Objects.equals(order.getBanAn().getMaBan(), effectiveTableId)) {
+        if (!tableArrangementService.isSameServiceGroup(scannedTable, order.getBanAn())) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
-                    "Đơn hàng không thuộc bàn của mã QR hiện tại"
+                    "Đơn hàng không thuộc bàn hoặc nhóm bàn của mã QR hiện tại"
             );
         }
     }

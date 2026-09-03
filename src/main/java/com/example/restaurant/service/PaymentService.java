@@ -34,11 +34,14 @@ import java.math.RoundingMode;
 import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Locale;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
 @Service
@@ -120,38 +123,26 @@ public class PaymentService {
      */
     @Transactional
     public Invoice createInvoice(PaymentRequest request, String username) {
-        Order order = orderRepository.findByIdForUpdate(request.maDonHang())
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Không tìm thấy đơn hàng: " + request.maDonHang()
-                ));
+        BillingContext billing = findPayableBillingContext(request.maDonHang(), true);
+        ensureBillingGroupHasNoInvoice(billing.orders());
 
-        if (invoiceRepository.findByDonHang_MaDonHang(order.getMaDonHang()).isPresent()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng đã được thanh toán");
-        }
-
-        orderPricingService.recalculate(order);
-        ensurePayable(order);
         Employee cashier = requireCashier(username);
         LoyaltyService.PreparedLoyalty loyalty = loyaltyService.prepareForPayment(
                 request.soDienThoaiKhachHang(),
                 request.hoTenKhachHang(),
                 request.diemSuDung(),
-                order.getTongTien()
+                billing.total()
         );
-        BigDecimal depositCredit = reservationService.depositCreditForOrder(order);
-        BigDecimal depositApplied = normalizedMoney(depositCredit).min(normalizedMoney(loyalty.finalAmount()));
+        BigDecimal depositApplied = billing.depositCredit().min(normalizedMoney(loyalty.finalAmount()));
         BigDecimal remainingPayable = normalizedMoney(loyalty.finalAmount())
                 .subtract(depositApplied)
                 .max(BigDecimal.ZERO.setScale(2));
 
         String paymentMethod;
         PaymentAmounts amounts;
-        String transactionCode;
         if (remainingPayable.signum() == 0) {
             paymentMethod = "TIEN_COC";
             amounts = new PaymentAmounts(BigDecimal.ZERO.setScale(2), BigDecimal.ZERO.setScale(2));
-            transactionCode = null;
         } else {
             paymentMethod = normalizePaymentMethod(request.phuongThucThanhToan());
             if (METHOD_BANK_TRANSFER.equals(paymentMethod)) {
@@ -161,69 +152,39 @@ public class PaymentService {
                 );
             }
             amounts = validatePaymentAmounts(remainingPayable, request, paymentMethod);
-            transactionCode = null;
-        }
-
-        if (transactionCode != null) {
-            if (invoiceRepository.existsByMaGiaoDichIgnoreCase(transactionCode)) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã giao dịch đã được sử dụng");
-            }
-            reservationService.ensureTransactionCodeNotUsedByDeposit(transactionCode);
         }
 
         LocalDateTime paidAt = LocalDateTime.now();
-        Invoice invoice = new Invoice();
-        invoice.setDonHang(order);
-        invoice.setNhanVien(cashier);
-        invoice.setKhachHang(loyalty.customer());
-        invoice.setTamTinh(normalizedMoney(order.getTamTinh()));
-        invoice.setTienGiam(normalizedMoney(order.getTienGiam()));
-        invoice.setTienCocDaKhauTru(depositApplied);
-        invoice.setPhiGiaoHang(BigDecimal.ZERO.setScale(2));
-        invoice.setDiemDaSuDung(loyalty.pointsUsed());
-        invoice.setTienGiamTuDiem(loyalty.pointDiscount());
-        invoice.setDiemDuocCong(loyalty.pointsEarned());
-        invoice.setMaCodeKhuyenMai(
-                order.getKhuyenMai() == null ? null : order.getKhuyenMai().getMaCode()
+        Invoice invoice = buildSharedInvoice(
+                billing,
+                cashier,
+                loyalty,
+                depositApplied,
+                paymentMethod,
+                amounts,
+                null,
+                mergePaymentNote(request.ghiChu(), billing),
+                paidAt
         );
-        invoice.setTongTien(normalizedMoney(loyalty.finalAmount()));
-        invoice.setThoiGianTao(paidAt);
-        invoice.setThoiGianThanhToan(paidAt);
-        invoice.setPhuongThucThanhToan(paymentMethod);
-        invoice.setTrangThaiThanhToan("DA_THANH_TOAN");
-        invoice.setTienKhachDua(amounts.cashReceived());
-        invoice.setTienThua(amounts.changeAmount());
-        invoice.setMaGiaoDich(transactionCode);
-        invoice.setGhiChu(trimToNull(request.ghiChu()));
-        invoice.setNoiDungChuyenKhoan(
-                METHOD_BANK_TRANSFER.equals(paymentMethod)
-                        ? buildTransferDescription(order.getMaDonHang())
-                        : null
-        );
-
-        // Lưu hóa đơn trước; ràng buộc unique ma_don_hang/ma_giao_dich là lớp
-        // bảo vệ cuối cùng nếu có hai request thanh toán đồng thời.
         Invoice savedInvoice = invoiceRepository.saveAndFlush(invoice);
-        reservationService.applyDepositByOrder(order, depositApplied);
+        enrichSharedInvoice(savedInvoice, billing.orders());
 
-        order.setKhachHang(loyalty.customer());
-        order.setDiemDaSuDung(loyalty.pointsUsed());
-        order.setTienGiamTuDiem(loyalty.pointDiscount());
-        order.setDiemDuocCong(loyalty.pointsEarned());
-        order.setTongTien(loyalty.finalAmount());
-        order.setTrangThai("DA_THANH_TOAN");
-        Order savedOrder = orderRepository.saveAndFlush(order);
-        loyaltyService.completePayment(loyalty, savedOrder);
-        reservationService.completeByOrder(savedOrder);
-        releaseTableWhenNoOtherOpenOrder(savedOrder);
+        applyDepositsForBillingGroup(billing.orders(), depositApplied);
+        List<Order> savedOrders = completeBillingOrders(billing, loyalty);
+        loyaltyService.completePayment(loyalty, billing.anchor());
+        for (Order savedOrder : savedOrders) {
+            reservationService.completeByOrder(savedOrder);
+        }
+        releaseTableWhenNoOtherOpenOrder(billing.anchor());
 
-        systemActivityService.record(
-                "PAYMENT_COMPLETED",
-                "Đơn hàng #DH" + savedOrder.getMaDonHang() + " đã được thanh toán",
-                savedOrder.getMaDonHang()
-        );
+        String message = billing.sharedBill()
+                ? "Đã thanh toán chung " + billing.tableLabel() + " (" + billing.orders().size() + " đơn)"
+                : "Đơn hàng #DH" + billing.anchor().getMaDonHang() + " đã được thanh toán";
+        systemActivityService.record("PAYMENT_COMPLETED", message, billing.anchor().getMaDonHang());
         realtimeNotificationService.notifyPaymentCompleted(savedInvoice);
-        realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
+        for (Order savedOrder : savedOrders) {
+            realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
+        }
         realtimeNotificationService.notifyDashboardRefresh(savedInvoice);
         return savedInvoice;
     }
@@ -349,8 +310,8 @@ public class PaymentService {
     public LoyaltyPreviewResponse previewLoyalty(Integer orderId,
                                                  String phone,
                                                  Integer pointsToUse) {
-        Order order = findPayableOrder(orderId);
-        return loyaltyService.preview(phone, pointsToUse, order.getTongTien());
+        BillingContext billing = findPayableBillingContext(orderId, false);
+        return loyaltyService.preview(phone, pointsToUse, billing.total());
     }
 
     /**
@@ -370,27 +331,29 @@ public class PaymentService {
             );
         }
 
-        Order order = findPayableOrder(orderId);
+        BillingContext billing = findPayableBillingContext(orderId, true);
+        ensureBillingGroupHasNoInvoice(billing.orders());
+        Order order = billing.anchor();
         Employee employee = requireCashierOrAdmin(username);
-        LoyaltyPreviewResponse preview = loyaltyService.preview(phone, pointsToUse, order.getTongTien());
-        BigDecimal depositCredit = reservationService.depositCreditForOrder(order);
+        LoyaltyPreviewResponse preview = loyaltyService.preview(phone, pointsToUse, billing.total());
         BigDecimal payable = normalizedMoney(preview.tongThanhToan())
-                .subtract(normalizedMoney(depositCredit).min(normalizedMoney(preview.tongThanhToan())))
+                .subtract(billing.depositCredit().min(normalizedMoney(preview.tongThanhToan())))
                 .max(BigDecimal.ZERO.setScale(2));
         long amount = toPayOsAmount(payable);
         if (amount <= 0) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Đơn hàng không còn số tiền cần chuyển khoản"
+                    "Bill không còn số tiền cần chuyển khoản"
             );
         }
 
         String normalizedPhone = trimToNull(preview.soDienThoai());
         int normalizedPoints = preview.diemSuDung() == null ? 0 : preview.diemSuDung();
         LocalDateTime now = LocalDateTime.now();
+        Integer anchorOrderId = order.getMaDonHang();
 
         List<PayOsPayment> pendingPayments = payOsPaymentRepository
-                .findByDonHang_MaDonHangAndTrangThaiOrderByThoiGianTaoDesc(orderId, "PENDING");
+                .findByDonHang_MaDonHangAndTrangThaiOrderByThoiGianTaoDesc(anchorOrderId, "PENDING");
         for (PayOsPayment pending : pendingPayments) {
             if (pending.getHetHanLuc() != null && !pending.getHetHanLuc().isAfter(now)) {
                 pending.setTrangThai("EXPIRED");
@@ -402,7 +365,6 @@ public class PaymentService {
                 return toPayOsVietQrResponse(pending);
             }
 
-            // Không để nhiều QR còn hiệu lực cho cùng một đơn với số tiền/điểm khác nhau.
             payOsGatewayService.cancelPayment(pending.getPayOsOrderCode(), "Tạo yêu cầu thanh toán mới");
             pending.setTrangThai("CANCELLED");
             payOsPaymentRepository.save(pending);
@@ -510,13 +472,12 @@ public class PaymentService {
     /** Tạo VietQR theo tổng tiền sau khi xem trước đổi điểm. */
     @Transactional(readOnly = true)
     public VietQrResponse createVietQr(Integer orderId, String phone, Integer pointsToUse) {
-        Order order = findPayableOrder(orderId);
-        LoyaltyPreviewResponse preview = loyaltyService.preview(phone, pointsToUse, order.getTongTien());
-        BigDecimal depositCredit = reservationService.depositCreditForOrder(order);
+        BillingContext billing = findPayableBillingContext(orderId, false);
+        LoyaltyPreviewResponse preview = loyaltyService.preview(phone, pointsToUse, billing.total());
         BigDecimal payable = normalizedMoney(preview.tongThanhToan())
-                .subtract(normalizedMoney(depositCredit).min(normalizedMoney(preview.tongThanhToan())))
+                .subtract(billing.depositCredit().min(normalizedMoney(preview.tongThanhToan())))
                 .max(BigDecimal.ZERO.setScale(2));
-        return buildVietQr(order, payable);
+        return buildVietQr(billing.anchor(), payable);
     }
 
     /**
@@ -525,33 +486,42 @@ public class PaymentService {
      */
     @Transactional(readOnly = true)
     public PaymentSlipResponse createPaymentSlip(Integer orderId) {
-        Order order = findPayableOrder(orderId);
-        List<PaymentSlipItemResponse> items = order.getChiTietDonHang().stream()
+        BillingContext billing = findPayableBillingContext(orderId, false);
+        Order order = billing.anchor();
+        List<PaymentSlipItemResponse> items = billing.orders().stream()
+                .flatMap(billingOrder -> billingOrder.getChiTietDonHang().stream())
                 .filter(item -> !"DA_HUY".equalsIgnoreCase(item.getTrangThaiMon()))
                 .map(this::toSlipItem)
                 .toList();
 
-        DiningTable table = order.getBanAn();
-        String waiterName = order.getNhanVien() != null
-                ? order.getNhanVien().getHoTen()
-                : null;
-
-        BigDecimal depositCredit = reservationService.depositCreditForOrder(order);
-        BigDecimal total = normalizedMoney(order.getTongTien());
-        BigDecimal depositApplied = normalizedMoney(depositCredit).min(total);
+        BigDecimal total = billing.total();
+        BigDecimal depositApplied = billing.depositCredit().min(total);
         BigDecimal remainingPayable = total.subtract(depositApplied).max(BigDecimal.ZERO.setScale(2));
+        String displayOrderCode = billing.orders().stream()
+                .map(item -> String.format("DH%07d", item.getMaDonHang()))
+                .collect(Collectors.joining(" + "));
+        String waiterName = billing.orders().stream()
+                .map(Order::getNhanVien)
+                .filter(Objects::nonNull)
+                .map(Employee::getHoTen)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.joining(" / "));
+        if (waiterName.isBlank()) {
+            waiterName = null;
+        }
 
         return new PaymentSlipResponse(
                 order.getMaDonHang(),
-                String.format("DH%07d", order.getMaDonHang()),
-                table != null ? table.getMaBan() : null,
-                table != null ? table.getTenBan() : null,
-                order.getThoiGianDat(),
-                order.getThoiGianYeuCauThanhToan(),
+                displayOrderCode,
+                billing.primaryTable() != null ? billing.primaryTable().getMaBan() : null,
+                billing.tableLabel(),
+                billing.orders().stream().map(Order::getThoiGianDat).filter(Objects::nonNull).min(LocalDateTime::compareTo).orElse(order.getThoiGianDat()),
+                billing.orders().stream().map(Order::getThoiGianYeuCauThanhToan).filter(Objects::nonNull).max(LocalDateTime::compareTo).orElse(order.getThoiGianYeuCauThanhToan()),
                 waiterName,
-                order.getKhuyenMai() == null ? null : order.getKhuyenMai().getMaCode(),
-                normalizedMoney(order.getTamTinh()),
-                normalizedMoney(order.getTienGiam()),
+                promotionCodes(billing.orders()),
+                billing.subtotal(),
+                billing.discount(),
                 total,
                 depositApplied,
                 remainingPayable,
@@ -559,17 +529,23 @@ public class PaymentService {
                 items,
                 buildVietQr(order, remainingPayable),
                 LocalDateTime.now(),
-                "PHIEU_TAM_TINH"
+                billing.sharedBill() ? "PHIEU_TAM_TINH_CHUNG" : "PHIEU_TAM_TINH"
         );
     }
 
     @Transactional(readOnly = true)
     public Invoice findByOrderId(Integer orderId) {
-        return invoiceRepository.findByDonHang_MaDonHang(orderId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND,
-                        "Đơn hàng chưa có hóa đơn: " + orderId
-                ));
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn hàng: " + orderId));
+        Invoice invoice = findExistingInvoiceForBillingGroup(order);
+        if (invoice == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Đơn hàng chưa có hóa đơn: " + orderId
+            );
+        }
+        enrichSharedInvoice(invoice, ordersForInvoice(invoice));
+        return invoice;
     }
 
     @Transactional(readOnly = true)
@@ -592,27 +568,35 @@ public class PaymentService {
         return new RevenueResponse(from, to, total, count);
     }
 
-    private Order findPayableOrder(Integer orderId) {
+    private BillingContext findPayableBillingContext(Integer orderId, boolean forUpdate) {
         if (orderId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã đơn hàng không hợp lệ");
         }
 
-        Order order = orderRepository.findById(orderId)
+        Order requested = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy đơn hàng: " + orderId
                 ));
-
-        if (invoiceRepository.findByDonHang_MaDonHang(orderId).isPresent()) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Đơn hàng đã thanh toán, vui lòng in hóa đơn chính thức"
-            );
+        List<Order> orders = forUpdate
+                ? tableArrangementService.findBillingOrdersForUpdate(requested)
+                : tableArrangementService.findBillingOrders(requested);
+        if (orders == null || orders.isEmpty()) {
+            orders = List.of(requested);
         }
 
-        orderPricingService.recalculate(order);
-        ensurePayable(order);
-        return order;
+        for (Order order : orders) {
+            if (invoiceRepository.findByDonHang_MaDonHang(order.getMaDonHang()).isPresent()) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Bill đã thanh toán, vui lòng in hóa đơn chính thức"
+                );
+            }
+            orderPricingService.recalculate(order);
+            ensurePayable(order);
+        }
+        Order anchor = tableArrangementService.resolveBillingPrimaryOrder(orders, requested);
+        return buildBillingContext(anchor, orders);
     }
 
     private void ensurePayable(Order order) {
@@ -817,10 +801,15 @@ public class PaymentService {
 
     private Invoice completePayOsTablePayment(PayOsPayment payment, String reference) {
         Integer orderId = payment.getDonHang().getMaDonHang();
-        Order order = orderRepository.findByIdForUpdate(orderId)
+        Order requested = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn hàng: " + orderId));
+        List<Order> billingOrders = tableArrangementService.findBillingOrdersForUpdate(requested);
+        if (billingOrders == null || billingOrders.isEmpty()) {
+            billingOrders = List.of(requested);
+        }
+        Order anchor = tableArrangementService.resolveBillingPrimaryOrder(billingOrders, requested);
 
-        Invoice existing = invoiceRepository.findByDonHang_MaDonHang(orderId).orElse(null);
+        Invoice existing = findExistingInvoiceForBillingGroup(anchor);
         if (existing != null) {
             String existingReference = trimToNull(existing.getMaGiaoDich());
             if (existingReference != null && existingReference.equalsIgnoreCase(reference)) {
@@ -828,27 +817,29 @@ public class PaymentService {
             }
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Đơn hàng đã có hóa đơn khác trước khi webhook payOS được xử lý"
+                    "Bill đã có hóa đơn khác trước khi webhook payOS được xử lý"
             );
         }
 
-        orderPricingService.recalculate(order);
-        ensurePayable(order);
+        for (Order billingOrder : billingOrders) {
+            orderPricingService.recalculate(billingOrder);
+            ensurePayable(billingOrder);
+        }
+        BillingContext billing = buildBillingContext(anchor, billingOrders);
         LoyaltyService.PreparedLoyalty loyalty = loyaltyService.prepareForPayment(
                 payment.getSoDienThoaiKhach(),
                 null,
                 payment.getDiemSuDung(),
-                order.getTongTien()
+                billing.total()
         );
-        BigDecimal depositCredit = reservationService.depositCreditForOrder(order);
-        BigDecimal depositApplied = normalizedMoney(depositCredit).min(normalizedMoney(loyalty.finalAmount()));
+        BigDecimal depositApplied = billing.depositCredit().min(normalizedMoney(loyalty.finalAmount()));
         BigDecimal remainingPayable = normalizedMoney(loyalty.finalAmount())
                 .subtract(depositApplied)
                 .max(BigDecimal.ZERO.setScale(2));
         if (remainingPayable.compareTo(normalizedMoney(payment.getSoTien())) != 0) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Tổng tiền hiện tại của đơn không còn khớp với giao dịch payOS đã thanh toán"
+                    "Tổng tiền hiện tại của bill không còn khớp với giao dịch payOS đã thanh toán"
             );
         }
         if (invoiceRepository.existsByMaGiaoDichIgnoreCase(reference)) {
@@ -857,50 +848,37 @@ public class PaymentService {
         reservationService.ensureTransactionCodeNotUsedByDeposit(reference);
 
         LocalDateTime paidAt = LocalDateTime.now();
-        Invoice invoice = new Invoice();
-        invoice.setDonHang(order);
-        invoice.setNhanVien(payment.getNhanVienKhoiTao());
-        invoice.setKhachHang(loyalty.customer());
-        invoice.setTamTinh(normalizedMoney(order.getTamTinh()));
-        invoice.setTienGiam(normalizedMoney(order.getTienGiam()));
-        invoice.setTienCocDaKhauTru(depositApplied);
-        invoice.setPhiGiaoHang(BigDecimal.ZERO.setScale(2));
-        invoice.setDiemDaSuDung(loyalty.pointsUsed());
-        invoice.setTienGiamTuDiem(loyalty.pointDiscount());
-        invoice.setDiemDuocCong(loyalty.pointsEarned());
-        invoice.setMaCodeKhuyenMai(order.getKhuyenMai() == null ? null : order.getKhuyenMai().getMaCode());
-        invoice.setTongTien(normalizedMoney(loyalty.finalAmount()));
-        invoice.setThoiGianTao(paidAt);
-        invoice.setThoiGianThanhToan(paidAt);
-        invoice.setPhuongThucThanhToan(METHOD_BANK_TRANSFER);
-        invoice.setTrangThaiThanhToan("DA_THANH_TOAN");
-        invoice.setTienKhachDua(null);
-        invoice.setTienThua(BigDecimal.ZERO.setScale(2));
-        invoice.setMaGiaoDich(reference);
-        invoice.setGhiChu("Thanh toán tự động qua payOS");
-        invoice.setNoiDungChuyenKhoan(payment.getNoiDungChuyenKhoan());
-
-        Invoice savedInvoice = invoiceRepository.saveAndFlush(invoice);
-        reservationService.applyDepositByOrder(order, depositApplied);
-
-        order.setKhachHang(loyalty.customer());
-        order.setDiemDaSuDung(loyalty.pointsUsed());
-        order.setTienGiamTuDiem(loyalty.pointDiscount());
-        order.setDiemDuocCong(loyalty.pointsEarned());
-        order.setTongTien(loyalty.finalAmount());
-        order.setTrangThai("DA_THANH_TOAN");
-        Order savedOrder = orderRepository.saveAndFlush(order);
-        loyaltyService.completePayment(loyalty, savedOrder);
-        reservationService.completeByOrder(savedOrder);
-        releaseTableWhenNoOtherOpenOrder(savedOrder);
-
-        systemActivityService.record(
-                "PAYOS_PAYMENT_COMPLETED",
-                "Đơn hàng #DH" + savedOrder.getMaDonHang() + " được payOS xác nhận thanh toán tự động",
-                savedOrder.getMaDonHang()
+        Invoice invoice = buildSharedInvoice(
+                billing,
+                payment.getNhanVienKhoiTao(),
+                loyalty,
+                depositApplied,
+                METHOD_BANK_TRANSFER,
+                new PaymentAmounts(null, BigDecimal.ZERO.setScale(2)),
+                reference,
+                billing.sharedBill() ? "Thanh toán chung tự động qua payOS" : "Thanh toán tự động qua payOS",
+                paidAt
         );
+        invoice.setNoiDungChuyenKhoan(payment.getNoiDungChuyenKhoan());
+        Invoice savedInvoice = invoiceRepository.saveAndFlush(invoice);
+        enrichSharedInvoice(savedInvoice, billing.orders());
+
+        applyDepositsForBillingGroup(billing.orders(), depositApplied);
+        List<Order> savedOrders = completeBillingOrders(billing, loyalty);
+        loyaltyService.completePayment(loyalty, billing.anchor());
+        for (Order savedOrder : savedOrders) {
+            reservationService.completeByOrder(savedOrder);
+        }
+        releaseTableWhenNoOtherOpenOrder(billing.anchor());
+
+        String message = billing.sharedBill()
+                ? billing.tableLabel() + " đã được payOS xác nhận thanh toán chung tự động"
+                : "Đơn hàng #DH" + billing.anchor().getMaDonHang() + " được payOS xác nhận thanh toán tự động";
+        systemActivityService.record("PAYOS_PAYMENT_COMPLETED", message, billing.anchor().getMaDonHang());
         realtimeNotificationService.notifyPaymentCompleted(savedInvoice);
-        realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
+        for (Order savedOrder : savedOrders) {
+            realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
+        }
         realtimeNotificationService.notifyDashboardRefresh(savedInvoice);
         return savedInvoice;
     }
@@ -1014,6 +992,224 @@ public class PaymentService {
         }
     }
 
+    private BillingContext buildBillingContext(Order anchor, List<Order> orders) {
+        List<Order> normalizedOrders = orders == null || orders.isEmpty() ? List.of(anchor) : List.copyOf(orders);
+        BigDecimal subtotal = normalizedOrders.stream()
+                .map(Order::getTamTinh)
+                .map(this::normalizedMoney)
+                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add);
+        BigDecimal discount = normalizedOrders.stream()
+                .map(Order::getTienGiam)
+                .map(this::normalizedMoney)
+                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add);
+        BigDecimal total = normalizedOrders.stream()
+                .map(Order::getTongTien)
+                .map(this::normalizedMoney)
+                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add);
+        BigDecimal depositCredit = normalizedOrders.stream()
+                .map(reservationService::depositCreditForOrder)
+                .map(this::normalizedMoney)
+                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add);
+
+        List<DiningTable> tables = anchor != null && anchor.getBanAn() != null
+                ? tableArrangementService.findServiceGroupTables(anchor.getBanAn())
+                : List.of();
+        DiningTable primaryTable = tables.stream()
+                .filter(table -> table.getMaBan() != null && table.getMaBan().equals(table.getMaBanChinh()))
+                .findFirst()
+                .orElse(anchor == null ? null : anchor.getBanAn());
+        String tableLabel = tables.stream()
+                .map(DiningTable::getTenBan)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.joining(" + "));
+        if (tableLabel.isBlank() && anchor != null && anchor.getBanAn() != null) {
+            tableLabel = anchor.getBanAn().getTenBan();
+        }
+        return new BillingContext(
+                anchor,
+                normalizedOrders,
+                primaryTable,
+                tableLabel,
+                normalizedMoney(subtotal),
+                normalizedMoney(discount),
+                normalizedMoney(total),
+                normalizedMoney(depositCredit),
+                normalizedOrders.size() > 1
+        );
+    }
+
+    private void ensureBillingGroupHasNoInvoice(List<Order> orders) {
+        for (Order order : orders) {
+            if (invoiceRepository.findByDonHang_MaDonHang(order.getMaDonHang()).isPresent()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Bill đã được thanh toán");
+            }
+        }
+    }
+
+    private Invoice findExistingInvoiceForBillingGroup(Order order) {
+        if (order == null || order.getMaDonHang() == null) {
+            return null;
+        }
+        Invoice direct = invoiceRepository.findByDonHang_MaDonHang(order.getMaDonHang()).orElse(null);
+        if (direct != null) {
+            return direct;
+        }
+        String groupId = trimToNull(order.getMaNhomThanhToan());
+        if (groupId == null) {
+            return null;
+        }
+        for (Order groupedOrder : orderRepository.findByMaNhomThanhToanOrderByThoiGianDatAscMaDonHangAsc(groupId)) {
+            Invoice invoice = invoiceRepository.findByDonHang_MaDonHang(groupedOrder.getMaDonHang()).orElse(null);
+            if (invoice != null) {
+                return invoice;
+            }
+        }
+        return null;
+    }
+
+    private List<Order> ordersForInvoice(Invoice invoice) {
+        if (invoice == null || invoice.getDonHang() == null) {
+            return List.of();
+        }
+        String groupId = trimToNull(invoice.getDonHang().getMaNhomThanhToan());
+        if (groupId == null) {
+            return List.of(invoice.getDonHang());
+        }
+        List<Order> orders = orderRepository.findByMaNhomThanhToanOrderByThoiGianDatAscMaDonHangAsc(groupId);
+        return orders.isEmpty() ? List.of(invoice.getDonHang()) : orders;
+    }
+
+    private void enrichSharedInvoice(Invoice invoice, List<Order> orders) {
+        if (invoice == null) {
+            return;
+        }
+        List<Order> sourceOrders = (orders == null || orders.isEmpty()
+                ? ordersForInvoice(invoice)
+                : orders).stream()
+                .filter(order -> !"DA_HUY".equalsIgnoreCase(order.getTrangThai()))
+                .toList();
+        invoice.setMaDonHangsThanhToanChung(sourceOrders.stream()
+                .map(Order::getMaDonHang)
+                .filter(Objects::nonNull)
+                .toList());
+        invoice.setChiTietThanhToanChung(sourceOrders.stream()
+                .flatMap(order -> order.getChiTietDonHang().stream())
+                .filter(item -> !"DA_HUY".equalsIgnoreCase(item.getTrangThaiMon()))
+                .toList());
+        String tableLabel = sourceOrders.stream()
+                .map(Order::getBanAn)
+                .filter(Objects::nonNull)
+                .map(DiningTable::getTenBan)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.joining(" + "));
+        invoice.setTenBanThanhToanChung(tableLabel.isBlank() ? null : tableLabel);
+    }
+
+    private Invoice buildSharedInvoice(BillingContext billing,
+                                       Employee cashier,
+                                       LoyaltyService.PreparedLoyalty loyalty,
+                                       BigDecimal depositApplied,
+                                       String paymentMethod,
+                                       PaymentAmounts amounts,
+                                       String transactionCode,
+                                       String note,
+                                       LocalDateTime paidAt) {
+        Invoice invoice = new Invoice();
+        invoice.setDonHang(billing.anchor());
+        invoice.setNhanVien(cashier);
+        invoice.setKhachHang(loyalty.customer());
+        invoice.setTamTinh(billing.subtotal());
+        invoice.setTienGiam(billing.discount());
+        invoice.setTienCocDaKhauTru(depositApplied);
+        invoice.setPhiGiaoHang(BigDecimal.ZERO.setScale(2));
+        invoice.setDiemDaSuDung(loyalty.pointsUsed());
+        invoice.setTienGiamTuDiem(loyalty.pointDiscount());
+        invoice.setDiemDuocCong(loyalty.pointsEarned());
+        invoice.setMaCodeKhuyenMai(promotionCodes(billing.orders()));
+        invoice.setTongTien(normalizedMoney(loyalty.finalAmount()));
+        invoice.setThoiGianTao(paidAt);
+        invoice.setThoiGianThanhToan(paidAt);
+        invoice.setPhuongThucThanhToan(paymentMethod);
+        invoice.setTrangThaiThanhToan("DA_THANH_TOAN");
+        invoice.setTienKhachDua(amounts.cashReceived());
+        invoice.setTienThua(amounts.changeAmount());
+        invoice.setMaGiaoDich(transactionCode);
+        invoice.setGhiChu(trimToNull(note));
+        invoice.setNoiDungChuyenKhoan(
+                METHOD_BANK_TRANSFER.equals(paymentMethod)
+                        ? buildTransferDescription(billing.anchor().getMaDonHang())
+                        : null
+        );
+        return invoice;
+    }
+
+    private void applyDepositsForBillingGroup(List<Order> orders, BigDecimal totalDepositApplied) {
+        BigDecimal remaining = normalizedMoney(totalDepositApplied);
+        for (Order order : orders) {
+            BigDecimal credit = normalizedMoney(reservationService.depositCreditForOrder(order));
+            if (credit.signum() <= 0) {
+                continue;
+            }
+            BigDecimal applied = credit.min(remaining.max(BigDecimal.ZERO.setScale(2)));
+            reservationService.applyDepositByOrder(order, applied);
+            remaining = remaining.subtract(applied).max(BigDecimal.ZERO.setScale(2));
+        }
+    }
+
+    private List<Order> completeBillingOrders(BillingContext billing,
+                                              LoyaltyService.PreparedLoyalty loyalty) {
+        BigDecimal remainingPointDiscount = normalizedMoney(loyalty.pointDiscount());
+        List<Order> saved = new ArrayList<>();
+        for (Order order : billing.orders()) {
+            BigDecimal originalTotal = normalizedMoney(order.getTongTien());
+            BigDecimal allocatedPointDiscount = remainingPointDiscount.min(originalTotal);
+            remainingPointDiscount = remainingPointDiscount.subtract(allocatedPointDiscount);
+
+            order.setKhachHang(loyalty.customer());
+            order.setTienGiamTuDiem(allocatedPointDiscount);
+            order.setTongTien(originalTotal.subtract(allocatedPointDiscount).max(BigDecimal.ZERO.setScale(2)));
+            if (order.getMaDonHang().equals(billing.anchor().getMaDonHang())) {
+                order.setDiemDaSuDung(loyalty.pointsUsed());
+                order.setDiemDuocCong(loyalty.pointsEarned());
+            } else {
+                order.setDiemDaSuDung(0);
+                order.setDiemDuocCong(0);
+            }
+            order.setTrangThai("DA_THANH_TOAN");
+            saved.add(order);
+        }
+        return orderRepository.saveAllAndFlush(saved);
+    }
+
+    private String promotionCodes(List<Order> orders) {
+        LinkedHashSet<String> codes = orders.stream()
+                .map(Order::getKhuyenMai)
+                .filter(Objects::nonNull)
+                .map(promotion -> trimToNull(promotion.getMaCode()))
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (codes.isEmpty()) {
+            return null;
+        }
+        String joined = String.join(", ", codes);
+        return joined.length() <= 50 ? joined : joined.substring(0, 50);
+    }
+
+    private String mergePaymentNote(String rawNote, BillingContext billing) {
+        String note = trimToNull(rawNote);
+        if (!billing.sharedBill()) {
+            return note;
+        }
+        String shared = "Thanh toán chung " + billing.tableLabel();
+        if (note == null) {
+            return shared;
+        }
+        String merged = shared + "; " + note;
+        return merged.length() <= 255 ? merged : merged.substring(0, 255);
+    }
+
     private String buildTransferDescription(Integer orderId) {
         String prefix = trimToNull(vietQrProperties.getDescriptionPrefix());
         if (prefix == null) {
@@ -1099,6 +1295,19 @@ public class PaymentService {
         return normalized.replaceAll("\\p{M}", "")
                 .replace('đ', 'd')
                 .replace('Đ', 'D');
+    }
+
+    private record BillingContext(
+            Order anchor,
+            List<Order> orders,
+            DiningTable primaryTable,
+            String tableLabel,
+            BigDecimal subtotal,
+            BigDecimal discount,
+            BigDecimal total,
+            BigDecimal depositCredit,
+            boolean sharedBill
+    ) {
     }
 
     private record PaymentAmounts(BigDecimal cashReceived, BigDecimal changeAmount) {

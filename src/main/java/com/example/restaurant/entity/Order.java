@@ -72,6 +72,13 @@ public class Order {
     @Column(name = "ghi_chu", length = 255)
     private String ghiChu;
 
+    /**
+     * Mã nhóm thanh toán khi nhiều bàn đang có đơn được ghép để tính chung một bill.
+     * Giữ lại trên đơn ngay cả sau khi các bàn được giải phóng để tra cứu hóa đơn chung.
+     */
+    @Column(name = "ma_nhom_thanh_toan", length = 64)
+    private String maNhomThanhToan;
+
     /** Tổng tiền món trước khuyến mãi. */
     @Column(name = "tam_tinh", precision = 12, scale = 2)
     private BigDecimal tamTinh = BigDecimal.ZERO;
