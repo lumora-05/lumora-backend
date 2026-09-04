@@ -14,6 +14,8 @@ import com.example.restaurant.dto.OrderItemCancellationResponse;
 import com.example.restaurant.dto.OrderItemStatusUpdateRequest;
 import com.example.restaurant.dto.OrderItemBulkStatusUpdateRequest;
 import com.example.restaurant.dto.OrderItemBulkStatusUpdateResponse;
+import com.example.restaurant.dto.OrderItemBulkServedRequest;
+import com.example.restaurant.dto.OrderItemBulkServedResponse;
 import com.example.restaurant.dto.OrderStatusUpdateRequest;
 import com.example.restaurant.entity.DiningTable;
 import com.example.restaurant.entity.Employee;
@@ -1343,6 +1345,172 @@ public class OrderService {
         realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
         return savedItem;
+    }
+
+    /**
+     * Nhân viên phục vụ xác nhận nhiều món đã được mang ra bàn trong một request.
+     * Mỗi đơn chỉ bị khóa một lần, trạng thái đơn chỉ đồng bộ một lần và realtime
+     * được gom theo cả thao tác thay vì phát một event cho từng món.
+     */
+    @Transactional
+    public OrderItemBulkServedResponse markItemsServedBulk(
+            OrderItemBulkServedRequest request,
+            String username) {
+        LinkedHashSet<Integer> requestedIds = new LinkedHashSet<>(request.itemIds());
+        if (requestedIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Danh sách món không được để trống");
+        }
+
+        List<Integer> orderIds = new ArrayList<>(
+                orderItemRepository.findDistinctOrderIdsByItemIds(requestedIds)
+        );
+        if (orderIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy các món cần xác nhận phục vụ");
+        }
+        // Khóa nhiều đơn theo cùng một thứ tự để giảm nguy cơ deadlock.
+        orderIds.sort(Integer::compareTo);
+
+        Employee waiter = resolveActiveWaiterByUsername(username);
+        LinkedHashSet<Integer> foundIds = new LinkedHashSet<>();
+        List<OrderItem> changedItems = new ArrayList<>();
+        Map<Integer, Order> changedOrders = new LinkedHashMap<>();
+        Map<Integer, String> oldOrderStatuses = new LinkedHashMap<>();
+
+        for (Integer orderId : orderIds) {
+            Order order = orderRepository.findByIdForUpdate(orderId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Không tìm thấy đơn hàng: " + orderId
+                    ));
+
+            if (order.isDeliveryOrder()) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Đơn giao hàng không có bước phục vụ tại bàn"
+                );
+            }
+            ensureWaiterCanAccessOrder(waiter, order);
+
+            String orderStatus = normalizeStatus(order.getTrangThai());
+            if ("CHO_XAC_NHAN".equals(orderStatus)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Đơn hàng chưa được nhân viên phục vụ xác nhận"
+                );
+            }
+            if (Set.of("CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "DA_THANH_TOAN", "DA_HUY")
+                    .contains(orderStatus)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Đơn hàng không còn ở trạng thái có thể xác nhận phục vụ món"
+                );
+            }
+
+            boolean orderChanged = false;
+            String oldOrderStatus = normalizeStatus(order.getTrangThai());
+
+            for (OrderItem item : order.getChiTietDonHang()) {
+                Integer itemId = item.getMaChiTiet();
+                if (!requestedIds.contains(itemId)) {
+                    continue;
+                }
+                foundIds.add(itemId);
+
+                String currentItemStatus = normalizeStatus(item.getTrangThaiMon());
+
+                // Cho phép gọi lặp lại an toàn nếu một món đã được phục vụ trước đó.
+                if ("DA_PHUC_VU".equals(currentItemStatus)) {
+                    continue;
+                }
+
+                if (!("HOAN_THANH".equals(currentItemStatus)
+                        || "DA_HOAN_THANH".equals(currentItemStatus)
+                        || "SAN_SANG".equals(currentItemStatus)
+                        || "SAN_SANG_PHUC_VU".equals(currentItemStatus))) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Chỉ có thể xác nhận phục vụ khi món đã hoàn thành"
+                    );
+                }
+
+                item.setTrangThaiMon("DA_PHUC_VU");
+                changedItems.add(item);
+                orderChanged = true;
+            }
+
+            if (orderChanged) {
+                List<OrderItem> activeItems = order.getChiTietDonHang() == null
+                        ? List.of()
+                        : order.getChiTietDonHang().stream()
+                        .filter(orderItem -> !"DA_HUY".equals(normalizeStatus(orderItem.getTrangThaiMon())))
+                        .toList();
+                boolean hasPendingCancellation = activeItems.stream()
+                        .anyMatch(orderItem -> ITEM_CANCELLATION_HOLD_STATUS.equals(
+                                normalizeStatus(orderItem.getTrangThaiMon())
+                        ));
+                boolean allServed = !activeItems.isEmpty()
+                        && !hasPendingCancellation
+                        && activeItems.stream()
+                        .allMatch(orderItem -> "DA_PHUC_VU".equals(
+                                normalizeStatus(orderItem.getTrangThaiMon())
+                        ));
+
+                if (allServed) {
+                    syncOrderTimestamps(order, oldOrderStatus, "DA_PHUC_VU");
+                    order.setTrangThai("DA_PHUC_VU");
+                    syncTableStatusAfterOrderStatus(order, "DA_PHUC_VU");
+                } else {
+                    synchronizeOrderStatusFromItems(order);
+                }
+
+                oldOrderStatuses.put(orderId, oldOrderStatus);
+                changedOrders.put(orderId, order);
+            }
+        }
+
+        if (foundIds.size() != requestedIds.size()) {
+            LinkedHashSet<Integer> missingIds = new LinkedHashSet<>(requestedIds);
+            missingIds.removeAll(foundIds);
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Không tìm thấy chi tiết đơn hàng: " + missingIds
+            );
+        }
+
+        if (!changedItems.isEmpty()) {
+            orderItemRepository.saveAll(changedItems);
+            changedOrders.values().forEach(orderRepository::save);
+            orderRepository.flush();
+
+            // Giữ nguyên lịch sử hoạt động theo từng món như luồng cũ.
+            for (OrderItem item : changedItems) {
+                Integer orderId = item.getDonHang() == null ? null : item.getDonHang().getMaDonHang();
+                systemActivityService.record(
+                        "WAITER_ITEM_SERVED",
+                        "Món " + item.getMonAn().getTenMonAn() + " trong đơn #DH"
+                                + orderId + " đã được phục vụ",
+                        orderId
+                );
+            }
+
+            // Chỉ một sự kiện bulk cho thao tác phục vụ nhiều món.
+            realtimeNotificationService.notifyOrderItemsServed(changedItems);
+
+            for (Map.Entry<Integer, Order> entry : changedOrders.entrySet()) {
+                Integer orderId = entry.getKey();
+                Order order = entry.getValue();
+                if (!Objects.equals(oldOrderStatuses.get(orderId), normalizeStatus(order.getTrangThai()))) {
+                    realtimeNotificationService.notifyOrderStatusChanged(order);
+                }
+                realtimeNotificationService.notifyCustomerOrderChanged(order);
+                realtimeNotificationService.notifyDashboardRefresh(order);
+            }
+        }
+
+        return new OrderItemBulkServedResponse(
+                changedItems.size(),
+                changedItems.stream().map(OrderItem::getMaChiTiet).toList()
+        );
     }
 
     @Transactional

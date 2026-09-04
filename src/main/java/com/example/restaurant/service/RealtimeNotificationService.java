@@ -181,6 +181,18 @@ public class RealtimeNotificationService {
         send("/topic/kitchen", "ORDER_ITEM_SERVED", "Món đã được phục vụ", data);
     }
 
+    /**
+     * Phiên bản bulk cho thao tác "Phục vụ cả lượt": chỉ phát một sự kiện
+     * cho toàn bộ danh sách món thay vì một event cho từng món.
+     */
+    public void notifyOrderItemsServed(Collection<OrderItem> items) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        send("/topic/orders", "ORDER_ITEMS_SERVED", "Nhiều món đã được nhân viên phục vụ mang ra bàn", items);
+        send("/topic/kitchen", "ORDER_ITEMS_SERVED", "Nhiều món đã được phục vụ", items);
+    }
+
     public void notifyItemCancellationRequested(OrderItem item) {
         send("/topic/orders", "ORDER_ITEM_CANCELLATION_REQUESTED", "Có yêu cầu hủy món cần xử lý", item);
         send("/topic/kitchen", "ORDER_ITEM_CANCELLATION_REQUESTED", "Món đang chờ xử lý yêu cầu hủy", item);

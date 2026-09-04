@@ -10,6 +10,8 @@ import com.example.restaurant.dto.OrderItemCancellationResponse;
 import com.example.restaurant.dto.OrderItemStatusUpdateRequest;
 import com.example.restaurant.dto.OrderItemBulkStatusUpdateRequest;
 import com.example.restaurant.dto.OrderItemBulkStatusUpdateResponse;
+import com.example.restaurant.dto.OrderItemBulkServedRequest;
+import com.example.restaurant.dto.OrderItemBulkServedResponse;
 import com.example.restaurant.dto.OrderStatusUpdateRequest;
 import com.example.restaurant.dto.PageResponse;
 import com.example.restaurant.dto.WaiterActiveOrderResponse;
@@ -283,6 +285,22 @@ public class OrderController {
                                                                   Authentication authentication) {
         OrderItem orderItem = orderService.markItemServed(itemId, authentication.getName());
         return ResponseEntity.ok(ApiResponse.success("Xác nhận món đã phục vụ thành công", orderItem));
+    }
+
+    /**
+     * Xác nhận nhiều món đã được mang ra bàn trong một request.
+     * Dùng cho thao tác "Phục vụ cả lượt" để tránh gửi Promise.all nhiều request /served.
+     */
+    @PutMapping("/items/served/bulk")
+    @PreAuthorize("hasRole('WAITER')")
+    public ResponseEntity<ApiResponse<OrderItemBulkServedResponse>> markItemsServedBulk(
+            @Valid @RequestBody OrderItemBulkServedRequest request,
+            Authentication authentication) {
+        OrderItemBulkServedResponse result = orderService.markItemsServedBulk(
+                request,
+                authentication.getName()
+        );
+        return ResponseEntity.ok(ApiResponse.success("Xác nhận nhiều món đã phục vụ thành công", result));
     }
 
     /** Phục vụ/admin hủy món và bắt buộc chọn lý do. */
