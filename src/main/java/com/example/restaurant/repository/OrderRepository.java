@@ -1,6 +1,7 @@
 package com.example.restaurant.repository;
 
 import com.example.restaurant.dto.CashierPaymentRequestProjection;
+import com.example.restaurant.dto.WaiterActiveOrderProjection;
 import com.example.restaurant.entity.Order;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
@@ -46,6 +47,61 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
                         @Param("statuses") Collection<String> statuses);
 
         long countByTrangThaiIn(Collection<String> statuses);
+
+        /**
+         * Danh sách đơn đang hoạt động trong các khu vực mà phục vụ được phân công.
+         * Chỉ chọn các cột cần cho màn hình theo dõi, tránh tải toàn bộ entity graph.
+         */
+        @Query("""
+                        select o.maDonHang as maDonHang,
+                               b.maBan as maBan,
+                               b.tenBan as tenBan,
+                               o.trangThai as trangThai,
+                               o.thoiGianDat as thoiGianDat,
+                               o.thoiGianCapNhat as thoiGianCapNhat,
+                               o.thoiGianSanSang as thoiGianSanSang,
+                               o.thoiGianYeuCauThanhToan as thoiGianYeuCauThanhToan,
+                               o.tongTien as tongTien,
+                               o.maNhomThanhToan as maNhomThanhToan,
+                               i.maChiTiet as maChiTiet,
+                               i.soLuong as soLuong,
+                               i.trangThaiMon as trangThaiMon,
+                               f.tenMonAn as tenMonAn,
+                               i.lanGoi as lanGoi,
+                               i.thoiGianThem as thoiGianThem
+                        from Order o
+                        left join o.banAn b
+                        left join o.chiTietDonHang i
+                        left join i.monAn f
+                        where lower(coalesce(b.khuVuc, 'Khu vực chung')) in :khuVuc
+                          and upper(o.trangThai) in :statuses
+                        order by o.thoiGianDat desc, o.maDonHang desc, i.maChiTiet asc
+                        """)
+        List<WaiterActiveOrderProjection> findWaiterActiveOrderRows(
+                        @Param("khuVuc") Collection<String> khuVuc,
+                        @Param("statuses") Collection<String> statuses);
+
+        /**
+         * Badge Đơn cần xử lý: đơn sẵn sàng/chờ thanh toán hoặc còn món đã hoàn thành
+         * nhưng chưa được phục vụ. Query count riêng để không phải tải danh sách đơn.
+         */
+        @Query("""
+                        select count(distinct o.maDonHang)
+                        from Order o
+                        left join o.banAn b
+                        left join o.chiTietDonHang i
+                        where lower(coalesce(b.khuVuc, 'Khu vực chung')) in :khuVuc
+                          and upper(o.trangThai) in :openStatuses
+                          and (
+                                upper(o.trangThai) in :attentionOrderStatuses
+                                or upper(coalesce(i.trangThaiMon, '')) in :readyItemStatuses
+                          )
+                        """)
+        long countWaiterAttentionOrders(
+                        @Param("khuVuc") Collection<String> khuVuc,
+                        @Param("openStatuses") Collection<String> openStatuses,
+                        @Param("attentionOrderStatuses") Collection<String> attentionOrderStatuses,
+                        @Param("readyItemStatuses") Collection<String> readyItemStatuses);
 
         List<Order> findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(String loaiDon);
 

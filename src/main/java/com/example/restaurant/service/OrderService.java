@@ -2,6 +2,8 @@ package com.example.restaurant.service;
 
 import com.example.restaurant.dto.CashierPaymentRequestProjection;
 import com.example.restaurant.dto.CashierPaymentRequestResponse;
+import com.example.restaurant.dto.WaiterActiveOrderProjection;
+import com.example.restaurant.dto.WaiterActiveOrderResponse;
 import com.example.restaurant.dto.OrderCreateRequest;
 import com.example.restaurant.dto.OrderItemCancellationDecisionRequest;
 import com.example.restaurant.dto.OrderItemCancellationRequest;
@@ -33,6 +35,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -77,6 +80,22 @@ public class OrderService {
     private static final Set<String> PAYMENT_PENDING_STATUSES = Set.of(
             "CHO_THANH_TOAN",
             "SAN_SANG_THANH_TOAN"
+    );
+
+    /** Trạng thái đơn cần làm nổi bật trên badge của phục vụ. */
+    private static final Set<String> WAITER_ATTENTION_ORDER_STATUSES = Set.of(
+            "SAN_SANG",
+            "SAN_SANG_PHUC_VU",
+            "CHO_THANH_TOAN",
+            "SAN_SANG_THANH_TOAN"
+    );
+
+    /** Trạng thái món đã hoàn thành nhưng còn chờ phục vụ mang ra bàn. */
+    private static final Set<String> WAITER_READY_ITEM_STATUSES = Set.of(
+            "HOAN_THANH",
+            "DA_HOAN_THANH",
+            "SAN_SANG",
+            "SAN_SANG_PHUC_VU"
     );
 
     /**
@@ -217,6 +236,81 @@ public class OrderService {
             return List.of();
         }
         return orderRepository.findByBanAn_KhuVucInIgnoreCaseOrderByThoiGianDatDescMaDonHangDesc(assignedAreas);
+    }
+
+    /**
+     * Danh sách nhẹ cho màn hình Đơn cần xử lý của phục vụ.
+     * Endpoint cũ /orders vẫn giữ nguyên để Lịch sử và các màn hình khác không đổi hành vi.
+     */
+    @Transactional(readOnly = true)
+    public List<WaiterActiveOrderResponse> findActiveOrdersForWaiter(String username) {
+        Employee waiter = resolveActiveWaiterByUsername(username);
+        Set<String> assignedAreas = WaiterAreaAccess.assignedAreaKeys(waiter);
+        if (assignedAreas.isEmpty()) {
+            return List.of();
+        }
+
+        List<WaiterActiveOrderProjection> rows = orderRepository.findWaiterActiveOrderRows(
+                assignedAreas,
+                OPEN_ORDER_STATUSES
+        );
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Integer, List<WaiterActiveOrderProjection>> rowsByOrder = new LinkedHashMap<>();
+        for (WaiterActiveOrderProjection row : rows) {
+            rowsByOrder.computeIfAbsent(row.getMaDonHang(), ignored -> new ArrayList<>()).add(row);
+        }
+
+        return rowsByOrder.values().stream()
+                .map(orderRows -> {
+                    WaiterActiveOrderProjection first = orderRows.get(0);
+                    WaiterActiveOrderResponse.TableSummary table = first.getMaBan() == null
+                            ? null
+                            : new WaiterActiveOrderResponse.TableSummary(first.getMaBan(), first.getTenBan());
+                    List<WaiterActiveOrderResponse.ItemSummary> items = orderRows.stream()
+                            .filter(row -> row.getMaChiTiet() != null)
+                            .map(row -> new WaiterActiveOrderResponse.ItemSummary(
+                                    row.getMaChiTiet(),
+                                    row.getSoLuong(),
+                                    row.getTrangThaiMon(),
+                                    row.getTenMonAn(),
+                                    row.getLanGoi(),
+                                    row.getThoiGianThem()
+                            ))
+                            .toList();
+
+                    return new WaiterActiveOrderResponse(
+                            first.getMaDonHang(),
+                            table,
+                            first.getTrangThai(),
+                            first.getThoiGianDat(),
+                            first.getThoiGianCapNhat(),
+                            first.getThoiGianSanSang(),
+                            first.getThoiGianYeuCauThanhToan(),
+                            first.getTongTien(),
+                            first.getMaNhomThanhToan(),
+                            items
+                    );
+                })
+                .toList();
+    }
+
+    /** Count nhẹ cho badge Đơn cần xử lý của phục vụ. */
+    @Transactional(readOnly = true)
+    public long countAttentionOrdersForWaiter(String username) {
+        Employee waiter = resolveActiveWaiterByUsername(username);
+        Set<String> assignedAreas = WaiterAreaAccess.assignedAreaKeys(waiter);
+        if (assignedAreas.isEmpty()) {
+            return 0L;
+        }
+        return orderRepository.countWaiterAttentionOrders(
+                assignedAreas,
+                OPEN_ORDER_STATUSES,
+                WAITER_ATTENTION_ORDER_STATUSES,
+                WAITER_READY_ITEM_STATUSES
+        );
     }
 
     @Transactional(readOnly = true)

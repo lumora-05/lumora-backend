@@ -9,6 +9,7 @@ import com.example.restaurant.dto.OrderItemCancellationResponse;
 import com.example.restaurant.dto.OrderItemStatusUpdateRequest;
 import com.example.restaurant.dto.OrderStatusUpdateRequest;
 import com.example.restaurant.dto.PageResponse;
+import com.example.restaurant.dto.WaiterActiveOrderResponse;
 import com.example.restaurant.entity.Order;
 import com.example.restaurant.entity.OrderItem;
 import com.example.restaurant.service.OrderService;
@@ -86,6 +87,30 @@ public class OrderController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy số yêu cầu thanh toán thành công",
                 orderService.countCashierPaymentRequests()
+        ));
+    }
+
+    /**
+     * Danh sách đơn đang hoạt động tối ưu riêng cho phục vụ.
+     * Không thay đổi /api/orders cũ để các màn hình lịch sử và nghiệp vụ khác giữ nguyên.
+     */
+    @GetMapping("/waiter/active")
+    @PreAuthorize("hasRole('WAITER')")
+    public ResponseEntity<ApiResponse<List<WaiterActiveOrderResponse>>> waiterActiveOrders(
+            Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy danh sách đơn cần xử lý thành công",
+                orderService.findActiveOrdersForWaiter(authentication.getName())
+        ));
+    }
+
+    /** Endpoint count nhẹ cho badge Đơn cần xử lý của phục vụ. */
+    @GetMapping("/waiter/attention-count")
+    @PreAuthorize("hasRole('WAITER')")
+    public ResponseEntity<ApiResponse<Long>> waiterAttentionCount(Authentication authentication) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy số đơn cần chú ý thành công",
+                orderService.countAttentionOrdersForWaiter(authentication.getName())
         ));
     }
 
