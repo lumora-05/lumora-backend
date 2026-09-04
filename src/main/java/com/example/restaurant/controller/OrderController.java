@@ -1,6 +1,7 @@
 package com.example.restaurant.controller;
 
 import com.example.restaurant.dto.ApiResponse;
+import com.example.restaurant.dto.CashierPaymentRequestResponse;
 import com.example.restaurant.dto.OrderCreateRequest;
 import com.example.restaurant.dto.OrderItemCancellationDecisionRequest;
 import com.example.restaurant.dto.OrderItemCancellationRequest;
@@ -63,6 +64,29 @@ public class OrderController {
             orders = orderService.findAll();
         }
         return ResponseEntity.ok(ApiResponse.success("Lấy danh sách đơn hàng thành công", orders));
+    }
+
+    /**
+     * Hàng chờ thanh toán tối ưu riêng cho thu ngân.
+     * Chỉ trả các đơn CHO_THANH_TOAN/SAN_SANG_THANH_TOAN và các trường cần cho danh sách.
+     */
+    @GetMapping("/payment-requests")
+    @PreAuthorize("hasRole('CASHIER')")
+    public ResponseEntity<ApiResponse<List<CashierPaymentRequestResponse>>> paymentRequests() {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy danh sách yêu cầu thanh toán thành công",
+                orderService.findCashierPaymentRequests()
+        ));
+    }
+
+    /** Endpoint đếm nhẹ để badge thu ngân không phải tải toàn bộ danh sách đơn hàng. */
+    @GetMapping("/payment-requests/count")
+    @PreAuthorize("hasRole('CASHIER')")
+    public ResponseEntity<ApiResponse<Long>> paymentRequestCount() {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy số yêu cầu thanh toán thành công",
+                orderService.countCashierPaymentRequests()
+        ));
     }
 
     @GetMapping("/page")

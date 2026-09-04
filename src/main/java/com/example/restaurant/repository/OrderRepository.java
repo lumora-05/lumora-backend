@@ -1,5 +1,6 @@
 package com.example.restaurant.repository;
 
+import com.example.restaurant.dto.CashierPaymentRequestProjection;
 import com.example.restaurant.entity.Order;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
@@ -15,6 +16,36 @@ import java.util.List;
 
 public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpecificationExecutor<Order> {
         List<Order> findByTrangThai(String trangThai);
+
+        /**
+         * Hàng chờ thanh toán dành riêng cho màn hình thu ngân.
+         * Projection này tránh serialize toàn bộ Order cùng các quan hệ EAGER không cần thiết.
+         */
+        @Query("""
+                        select o.maDonHang as maDonHang,
+                               b.maBan as maBan,
+                               b.tenBan as tenBan,
+                               b.maBanChinh as maBanChinh,
+                               coalesce(sum(case when i.trangThaiMon <> 'DA_HUY' then i.soLuong else 0 end), 0) as soMon,
+                               o.tongTien as tongTien,
+                               o.trangThai as trangThai,
+                               o.thoiGianYeuCauThanhToan as thoiGianYeuCauThanhToan,
+                               o.thoiGianCapNhat as thoiGianCapNhat,
+                               o.thoiGianDat as thoiGianDat,
+                               o.maNhomThanhToan as maNhomThanhToan
+                        from Order o
+                        left join o.banAn b
+                        left join o.chiTietDonHang i
+                        where o.trangThai in :statuses
+                        group by o.maDonHang, b.maBan, b.tenBan, b.maBanChinh, o.tongTien, o.trangThai,
+                                 o.thoiGianYeuCauThanhToan, o.thoiGianCapNhat, o.thoiGianDat, o.maNhomThanhToan
+                        order by coalesce(o.thoiGianYeuCauThanhToan, o.thoiGianCapNhat, o.thoiGianDat) asc,
+                                 o.maDonHang asc
+                        """)
+        List<CashierPaymentRequestProjection> findCashierPaymentRequests(
+                        @Param("statuses") Collection<String> statuses);
+
+        long countByTrangThaiIn(Collection<String> statuses);
 
         List<Order> findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(String loaiDon);
 

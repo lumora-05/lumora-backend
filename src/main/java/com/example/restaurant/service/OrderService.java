@@ -1,5 +1,7 @@
 package com.example.restaurant.service;
 
+import com.example.restaurant.dto.CashierPaymentRequestProjection;
+import com.example.restaurant.dto.CashierPaymentRequestResponse;
 import com.example.restaurant.dto.OrderCreateRequest;
 import com.example.restaurant.dto.OrderItemCancellationDecisionRequest;
 import com.example.restaurant.dto.OrderItemCancellationRequest;
@@ -166,6 +168,45 @@ public class OrderService {
 
     public List<Order> findAll() {
         return orderRepository.findAll();
+    }
+
+    /**
+     * Danh sách nhẹ dành riêng cho hàng chờ thanh toán của thu ngân.
+     * Không dùng findAll() vì trang này chỉ cần hai trạng thái đang chờ và một số trường tóm tắt.
+     */
+    @Transactional(readOnly = true)
+    public List<CashierPaymentRequestResponse> findCashierPaymentRequests() {
+        return orderRepository.findCashierPaymentRequests(PAYMENT_PENDING_STATUSES).stream()
+                .map(this::toCashierPaymentRequestResponse)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public long countCashierPaymentRequests() {
+        return orderRepository.countByTrangThaiIn(PAYMENT_PENDING_STATUSES);
+    }
+
+    private CashierPaymentRequestResponse toCashierPaymentRequestResponse(
+            CashierPaymentRequestProjection row) {
+        CashierPaymentRequestResponse.TableSummary table = row.getMaBan() == null
+                ? null
+                : new CashierPaymentRequestResponse.TableSummary(
+                        row.getMaBan(),
+                        row.getTenBan(),
+                        row.getMaBanChinh()
+                );
+
+        return new CashierPaymentRequestResponse(
+                row.getMaDonHang(),
+                table,
+                row.getSoMon() == null ? 0L : row.getSoMon(),
+                row.getTongTien(),
+                row.getTrangThai(),
+                row.getThoiGianYeuCauThanhToan(),
+                row.getThoiGianCapNhat(),
+                row.getThoiGianDat(),
+                row.getMaNhomThanhToan()
+        );
     }
 
     @Transactional(readOnly = true)
