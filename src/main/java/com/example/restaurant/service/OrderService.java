@@ -2,6 +2,9 @@ package com.example.restaurant.service;
 
 import com.example.restaurant.dto.CashierPaymentRequestProjection;
 import com.example.restaurant.dto.CashierPaymentRequestResponse;
+import com.example.restaurant.dto.KitchenActiveOrderProjection;
+import com.example.restaurant.dto.KitchenActiveOrderResponse;
+import com.example.restaurant.dto.KitchenAttentionTicketProjection;
 import com.example.restaurant.dto.WaiterActiveOrderProjection;
 import com.example.restaurant.dto.WaiterActiveOrderResponse;
 import com.example.restaurant.dto.OrderCreateRequest;
@@ -96,6 +99,33 @@ public class OrderService {
             "DA_HOAN_THANH",
             "SAN_SANG",
             "SAN_SANG_PHUC_VU"
+    );
+
+    /** Đơn đã đóng không còn thuộc Bảng chế biến đang hoạt động của bếp. */
+    private static final Set<String> KITCHEN_CLOSED_ORDER_STATUSES = Set.of(
+            "DA_THANH_TOAN",
+            "DA_HUY"
+    );
+
+    /** Đơn online ở hai bước này chưa được phép chuyển vào bếp. */
+    private static final Set<String> KITCHEN_HIDDEN_DELIVERY_ORDER_STATUSES = Set.of(
+            "CHO_THANH_TOAN",
+            "CHO_DEN_GIO"
+    );
+
+    /** Món bị hủy/đang chờ duyệt hủy không hiển thị trên bảng bếp. */
+    private static final Set<String> KITCHEN_HIDDEN_ITEM_STATUSES = Set.of(
+            "DA_HUY",
+            "YEU_CAU_HUY"
+    );
+
+    /** Các trạng thái được frontend hiện tại quy về HOAN_THANH. */
+    private static final Set<String> KITCHEN_DONE_ITEM_STATUSES = Set.of(
+            "HOAN_THANH",
+            "DA_HOAN_THANH",
+            "SAN_SANG",
+            "SAN_SANG_PHUC_VU",
+            "DA_PHUC_VU"
     );
 
     /**
@@ -437,6 +467,77 @@ public class OrderService {
         return orderRepository.findAll().stream()
                 .filter(order -> !isHiddenFromKitchen(order))
                 .toList();
+    }
+
+    /**
+     * Danh sách nhẹ cho Bảng chế biến/Thông báo bếp.
+     * Không dùng findAll(): chỉ query các đơn đang mở và các cột UI bếp thực sự cần.
+     * Endpoint /orders cũ được giữ nguyên để lịch sử/chi tiết chưa đổi hành vi.
+     */
+    @Transactional(readOnly = true)
+    public List<KitchenActiveOrderResponse> findActiveOrdersForKitchen() {
+        List<KitchenActiveOrderProjection> rows = orderRepository.findKitchenActiveOrderRows(
+                KITCHEN_CLOSED_ORDER_STATUSES,
+                KITCHEN_HIDDEN_DELIVERY_ORDER_STATUSES,
+                KITCHEN_HIDDEN_ITEM_STATUSES
+        );
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Integer, List<KitchenActiveOrderProjection>> rowsByOrder = new LinkedHashMap<>();
+        for (KitchenActiveOrderProjection row : rows) {
+            rowsByOrder.computeIfAbsent(row.getMaDonHang(), ignored -> new ArrayList<>()).add(row);
+        }
+
+        return rowsByOrder.values().stream()
+                .map(orderRows -> {
+                    KitchenActiveOrderProjection first = orderRows.get(0);
+                    KitchenActiveOrderResponse.TableSummary table = first.getMaBan() == null
+                            ? null
+                            : new KitchenActiveOrderResponse.TableSummary(first.getMaBan(), first.getTenBan());
+                    KitchenActiveOrderResponse.DeliverySummary delivery = first.getPhuongThucNhanHang() == null
+                            ? null
+                            : new KitchenActiveOrderResponse.DeliverySummary(first.getPhuongThucNhanHang());
+                    List<KitchenActiveOrderResponse.ItemSummary> items = orderRows.stream()
+                            .map(row -> new KitchenActiveOrderResponse.ItemSummary(
+                                    row.getMaChiTiet(),
+                                    new KitchenActiveOrderResponse.FoodSummary(row.getMaMonAn(), row.getTenMonAn()),
+                                    row.getSoLuong(),
+                                    row.getGhiChuMon(),
+                                    row.getTrangThaiMon(),
+                                    row.getLanGoi(),
+                                    row.getThoiGianThem()
+                            ))
+                            .toList();
+
+                    return new KitchenActiveOrderResponse(
+                            first.getMaDonHang(),
+                            table,
+                            first.getTrangThai(),
+                            first.getThoiGianDat(),
+                            first.getGhiChuDon(),
+                            first.getLoaiDon(),
+                            delivery,
+                            items
+                    );
+                })
+                .toList();
+    }
+
+    /**
+     * Count nhẹ theo đúng khái niệm phiếu bếp của frontend: mã đơn + lần gọi.
+     * Chỉ tính phiếu còn ít nhất một món chưa hoàn thành.
+     */
+    @Transactional(readOnly = true)
+    public long countKitchenAttentionTickets() {
+        List<KitchenAttentionTicketProjection> tickets = orderRepository.findKitchenAttentionTickets(
+                KITCHEN_CLOSED_ORDER_STATUSES,
+                KITCHEN_HIDDEN_DELIVERY_ORDER_STATUSES,
+                KITCHEN_HIDDEN_ITEM_STATUSES,
+                KITCHEN_DONE_ITEM_STATUSES
+        );
+        return tickets.size();
     }
 
     public Order findByIdForKitchen(Integer id) {

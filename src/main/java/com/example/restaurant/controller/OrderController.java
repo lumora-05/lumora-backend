@@ -2,6 +2,7 @@ package com.example.restaurant.controller;
 
 import com.example.restaurant.dto.ApiResponse;
 import com.example.restaurant.dto.CashierPaymentRequestResponse;
+import com.example.restaurant.dto.KitchenActiveOrderResponse;
 import com.example.restaurant.dto.OrderCreateRequest;
 import com.example.restaurant.dto.OrderItemCancellationDecisionRequest;
 import com.example.restaurant.dto.OrderItemCancellationRequest;
@@ -111,6 +112,29 @@ public class OrderController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Lấy số đơn cần chú ý thành công",
                 orderService.countAttentionOrdersForWaiter(authentication.getName())
+        ));
+    }
+
+    /**
+     * Danh sách nhẹ dành riêng cho Bảng chế biến/Thông báo bếp.
+     * Không thay đổi GET /api/orders cũ để lịch sử và các màn hình khác giữ nguyên.
+     */
+    @GetMapping("/kitchen/active")
+    @PreAuthorize("hasRole('KITCHEN')")
+    public ResponseEntity<ApiResponse<List<KitchenActiveOrderResponse>>> kitchenActiveOrders() {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy danh sách phiếu bếp đang hoạt động thành công",
+                orderService.findActiveOrdersForKitchen()
+        ));
+    }
+
+    /** Endpoint count nhẹ cho badge/chuông/nhắc việc của bếp. */
+    @GetMapping("/kitchen/attention-count")
+    @PreAuthorize("hasRole('KITCHEN')")
+    public ResponseEntity<ApiResponse<Long>> kitchenAttentionCount() {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Lấy số phiếu bếp cần xử lý thành công",
+                orderService.countKitchenAttentionTickets()
         ));
     }
 

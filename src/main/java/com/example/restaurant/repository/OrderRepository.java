@@ -1,6 +1,8 @@
 package com.example.restaurant.repository;
 
 import com.example.restaurant.dto.CashierPaymentRequestProjection;
+import com.example.restaurant.dto.KitchenActiveOrderProjection;
+import com.example.restaurant.dto.KitchenAttentionTicketProjection;
 import com.example.restaurant.dto.WaiterActiveOrderProjection;
 import com.example.restaurant.entity.Order;
 import jakarta.persistence.LockModeType;
@@ -102,6 +104,70 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
                         @Param("openStatuses") Collection<String> openStatuses,
                         @Param("attentionOrderStatuses") Collection<String> attentionOrderStatuses,
                         @Param("readyItemStatuses") Collection<String> readyItemStatuses);
+
+        /**
+         * Bảng chế biến của bếp: chỉ lấy đơn đang mở và các trường thực sự cần cho UI.
+         * Điều kiện hiển thị giữ nguyên nghiệp vụ của findAllForKitchen + filter frontend cũ.
+         */
+        @Query("""
+                        select o.maDonHang as maDonHang,
+                               b.maBan as maBan,
+                               b.tenBan as tenBan,
+                               o.trangThai as trangThai,
+                               o.thoiGianDat as thoiGianDat,
+                               o.ghiChu as ghiChuDon,
+                               o.loaiDon as loaiDon,
+                               d.phuongThucNhanHang as phuongThucNhanHang,
+                               i.maChiTiet as maChiTiet,
+                               i.soLuong as soLuong,
+                               i.ghiChu as ghiChuMon,
+                               i.trangThaiMon as trangThaiMon,
+                               i.lanGoi as lanGoi,
+                               i.thoiGianThem as thoiGianThem,
+                               f.maMonAn as maMonAn,
+                               f.tenMonAn as tenMonAn
+                        from Order o
+                        left join o.banAn b
+                        left join o.giaoHang d
+                        join o.chiTietDonHang i
+                        join i.monAn f
+                        where upper(o.trangThai) not in :closedOrderStatuses
+                          and upper(o.trangThai) <> 'CHO_XAC_NHAN'
+                          and not (
+                                upper(coalesce(o.loaiDon, 'TAI_BAN')) = 'GIAO_HANG'
+                                and upper(o.trangThai) in :hiddenDeliveryStatuses
+                          )
+                          and upper(coalesce(i.trangThaiMon, 'CHO_BEP')) not in :hiddenItemStatuses
+                        order by coalesce(i.thoiGianThem, o.thoiGianDat) asc,
+                                 o.maDonHang asc, coalesce(i.lanGoi, 1) asc, i.maChiTiet asc
+                        """)
+        List<KitchenActiveOrderProjection> findKitchenActiveOrderRows(
+                        @Param("closedOrderStatuses") Collection<String> closedOrderStatuses,
+                        @Param("hiddenDeliveryStatuses") Collection<String> hiddenDeliveryStatuses,
+                        @Param("hiddenItemStatuses") Collection<String> hiddenItemStatuses);
+
+        /**
+         * Các phiếu bếp (mã đơn + lần gọi) vẫn còn ít nhất một món chưa hoàn thành.
+         * Chỉ trả hai cột để badge/header và nhắc việc không phải gọi full /orders.
+         */
+        @Query("""
+                        select distinct o.maDonHang as maDonHang, coalesce(i.lanGoi, 1) as lanGoi
+                        from Order o
+                        join o.chiTietDonHang i
+                        where upper(o.trangThai) not in :closedOrderStatuses
+                          and upper(o.trangThai) <> 'CHO_XAC_NHAN'
+                          and not (
+                                upper(coalesce(o.loaiDon, 'TAI_BAN')) = 'GIAO_HANG'
+                                and upper(o.trangThai) in :hiddenDeliveryStatuses
+                          )
+                          and upper(coalesce(i.trangThaiMon, 'CHO_BEP')) not in :hiddenItemStatuses
+                          and upper(coalesce(i.trangThaiMon, 'CHO_BEP')) not in :doneItemStatuses
+                        """)
+        List<KitchenAttentionTicketProjection> findKitchenAttentionTickets(
+                        @Param("closedOrderStatuses") Collection<String> closedOrderStatuses,
+                        @Param("hiddenDeliveryStatuses") Collection<String> hiddenDeliveryStatuses,
+                        @Param("hiddenItemStatuses") Collection<String> hiddenItemStatuses,
+                        @Param("doneItemStatuses") Collection<String> doneItemStatuses);
 
         List<Order> findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(String loaiDon);
 
