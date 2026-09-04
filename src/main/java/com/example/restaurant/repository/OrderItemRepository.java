@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 public interface OrderItemRepository extends JpaRepository<OrderItem, Integer> {
@@ -27,6 +28,9 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Integer> {
     );
 
     List<OrderItem> findByTrangThaiHuyOrderByThoiGianYeuCauHuyDesc(String trangThaiHuy);
+
+    @Query("select distinct i.donHang.maDonHang from OrderItem i where i.maChiTiet in :itemIds")
+    List<Integer> findDistinctOrderIdsByItemIds(@Param("itemIds") Collection<Integer> itemIds);
 
     @Query("""
             select coalesce(sum(i.soLuong), 0)

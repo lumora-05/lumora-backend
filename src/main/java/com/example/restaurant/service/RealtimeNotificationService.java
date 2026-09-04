@@ -162,6 +162,20 @@ public class RealtimeNotificationService {
         pushReadyItemToWaiter(data);
     }
 
+    /**
+     * Phiên bản bulk: chỉ phát một sự kiện realtime cho toàn bộ lần thao tác của bếp,
+     * tránh mỗi món làm KitchenBoard/KitchenLayout tải lại active/count một lần.
+     * Push cho phục vụ vẫn được giữ theo từng món vừa hoàn thành.
+     */
+    public void notifyKitchenItemsStatusChanged(Collection<OrderItem> items) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        send("/topic/kitchen", "KITCHEN_ITEMS_STATUS_CHANGED", "Trạng thái nhiều món đã thay đổi", items);
+        send("/topic/orders", "KITCHEN_ITEMS_STATUS_CHANGED", "Nhiều món trong đơn hàng đã được cập nhật", items);
+        items.forEach(this::pushReadyItemToWaiter);
+    }
+
     public void notifyOrderItemServed(Object data) {
         send("/topic/orders", "ORDER_ITEM_SERVED", "Món đã được nhân viên phục vụ mang ra bàn", data);
         send("/topic/kitchen", "ORDER_ITEM_SERVED", "Món đã được phục vụ", data);

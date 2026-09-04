@@ -8,6 +8,8 @@ import com.example.restaurant.dto.OrderItemCancellationDecisionRequest;
 import com.example.restaurant.dto.OrderItemCancellationRequest;
 import com.example.restaurant.dto.OrderItemCancellationResponse;
 import com.example.restaurant.dto.OrderItemStatusUpdateRequest;
+import com.example.restaurant.dto.OrderItemBulkStatusUpdateRequest;
+import com.example.restaurant.dto.OrderItemBulkStatusUpdateResponse;
 import com.example.restaurant.dto.OrderStatusUpdateRequest;
 import com.example.restaurant.dto.PageResponse;
 import com.example.restaurant.dto.WaiterActiveOrderResponse;
@@ -253,6 +255,22 @@ public class OrderController {
                                                                     Authentication authentication) {
         OrderItem orderItem = orderService.updateItemStatus(itemId, request, authentication.getName());
         return ResponseEntity.ok(ApiResponse.success("Cập nhật trạng thái món ăn thành công", orderItem));
+    }
+
+    /**
+     * Cập nhật nhiều món trong cùng một request để tránh frontend gửi Promise.all
+     * nhiều request /status cùng lúc và tranh chấp khóa trên cùng đơn hàng.
+     */
+    @PutMapping("/items/status/bulk")
+    @PreAuthorize("hasRole('KITCHEN')")
+    public ResponseEntity<ApiResponse<OrderItemBulkStatusUpdateResponse>> updateItemStatusesBulk(
+            @Valid @RequestBody OrderItemBulkStatusUpdateRequest request,
+            Authentication authentication) {
+        OrderItemBulkStatusUpdateResponse result = orderService.updateItemStatusesBulk(
+                request,
+                authentication.getName()
+        );
+        return ResponseEntity.ok(ApiResponse.success("Cập nhật trạng thái nhiều món thành công", result));
     }
 
     /**

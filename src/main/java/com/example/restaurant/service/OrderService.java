@@ -12,6 +12,8 @@ import com.example.restaurant.dto.OrderItemCancellationDecisionRequest;
 import com.example.restaurant.dto.OrderItemCancellationRequest;
 import com.example.restaurant.dto.OrderItemCancellationResponse;
 import com.example.restaurant.dto.OrderItemStatusUpdateRequest;
+import com.example.restaurant.dto.OrderItemBulkStatusUpdateRequest;
+import com.example.restaurant.dto.OrderItemBulkStatusUpdateResponse;
 import com.example.restaurant.dto.OrderStatusUpdateRequest;
 import com.example.restaurant.entity.DiningTable;
 import com.example.restaurant.entity.Employee;
@@ -38,6 +40,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -1340,6 +1343,147 @@ public class OrderService {
         realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
         return savedItem;
+    }
+
+    @Transactional
+    public OrderItemBulkStatusUpdateResponse updateItemStatusesBulk(
+            OrderItemBulkStatusUpdateRequest request,
+            String username) {
+        LinkedHashSet<Integer> requestedIds = new LinkedHashSet<>(request.itemIds());
+        if (requestedIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Danh sách món không được để trống");
+        }
+
+        String newItemStatus = normalizeStatus(request.trangThaiMon());
+        if (!KITCHEN_WRITABLE_ITEM_STATUSES.contains(newItemStatus)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Bếp không được phép cập nhật món sang trạng thái: " + newItemStatus
+            );
+        }
+
+        List<Integer> orderIds = new ArrayList<>(
+                orderItemRepository.findDistinctOrderIdsByItemIds(requestedIds)
+        );
+        if (orderIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy các món cần cập nhật");
+        }
+        // Khóa theo cùng một thứ tự để giảm nguy cơ deadlock nếu bulk có nhiều đơn.
+        orderIds.sort(Integer::compareTo);
+
+        LinkedHashSet<Integer> foundIds = new LinkedHashSet<>();
+        List<OrderItem> changedItems = new ArrayList<>();
+        Map<Integer, Order> changedOrders = new LinkedHashMap<>();
+        Map<Integer, String> oldOrderStatuses = new LinkedHashMap<>();
+
+        for (Integer orderId : orderIds) {
+            Order order = orderRepository.findByIdForUpdate(orderId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.NOT_FOUND,
+                            "Không tìm thấy đơn hàng: " + orderId
+                    ));
+
+            String orderStatus = normalizeStatus(order.getTrangThai());
+            if (isHiddenFromKitchen(order)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Đơn hàng chưa đến bước bếp được phép xử lý"
+                );
+            }
+            if (Set.of(
+                    "CHO_TAI_XE_NHAN", "CHO_BAN_GIAO", "DANG_GIAO", "CHO_DOI_SOAT",
+                    "GIAO_THAT_BAI", "DA_THANH_TOAN", "DA_HUY"
+            ).contains(orderStatus)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Đơn hàng đã bàn giao hoặc kết thúc, không thể cập nhật món"
+                );
+            }
+
+            boolean orderChanged = false;
+            for (OrderItem item : order.getChiTietDonHang()) {
+                Integer itemId = item.getMaChiTiet();
+                if (!requestedIds.contains(itemId)) {
+                    continue;
+                }
+                foundIds.add(itemId);
+
+                String oldItemStatus = normalizeStatus(item.getTrangThaiMon());
+                if (Objects.equals(oldItemStatus, newItemStatus)) {
+                    continue;
+                }
+                if (ITEM_CANCELLATION_HOLD_STATUS.equals(oldItemStatus)) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Món đang chờ xử lý yêu cầu hủy, không thể cập nhật trạng thái chế biến"
+                    );
+                }
+                validateItemTransition(oldItemStatus, newItemStatus);
+
+                boolean startsCooking = !isCookingItemStatus(oldItemStatus)
+                        && !isReadyForServiceStatus(oldItemStatus)
+                        && (isCookingItemStatus(newItemStatus) || isReadyForServiceStatus(newItemStatus));
+                if (startsCooking) {
+                    foodTraceabilityService.allocateForCooking(item, username);
+                }
+
+                item.setTrangThaiMon(newItemStatus);
+                changedItems.add(item);
+                orderChanged = true;
+            }
+
+            if (orderChanged) {
+                oldOrderStatuses.put(orderId, order.getTrangThai());
+                synchronizeOrderStatusFromItems(order);
+                deliveryOrderService.synchronizeAfterKitchenUpdate(order);
+                orderPricingService.recalculate(order);
+                changedOrders.put(orderId, order);
+            }
+        }
+
+        if (foundIds.size() != requestedIds.size()) {
+            LinkedHashSet<Integer> missingIds = new LinkedHashSet<>(requestedIds);
+            missingIds.removeAll(foundIds);
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Không tìm thấy chi tiết đơn hàng: " + missingIds
+            );
+        }
+
+        if (!changedItems.isEmpty()) {
+            orderItemRepository.saveAll(changedItems);
+            changedOrders.values().forEach(orderRepository::save);
+            orderRepository.flush();
+
+            for (OrderItem item : changedItems) {
+                Integer orderId = item.getDonHang() == null ? null : item.getDonHang().getMaDonHang();
+                systemActivityService.record(
+                        "KITCHEN_ITEM_STATUS_CHANGED",
+                        "Món " + item.getMonAn().getTenMonAn() + " trong đơn #DH" + orderId
+                                + " đã chuyển sang " + item.getTrangThaiMon(),
+                        orderId
+                );
+            }
+
+            // Chỉ một event bulk cho bếp/orders thay vì một event cho từng món.
+            realtimeNotificationService.notifyKitchenItemsStatusChanged(changedItems);
+
+            for (Map.Entry<Integer, Order> entry : changedOrders.entrySet()) {
+                Integer orderId = entry.getKey();
+                Order order = entry.getValue();
+                if (!Objects.equals(oldOrderStatuses.get(orderId), order.getTrangThai())) {
+                    realtimeNotificationService.notifyOrderStatusChanged(order);
+                }
+                realtimeNotificationService.notifyCustomerOrderChanged(order);
+                realtimeNotificationService.notifyDashboardRefresh(order);
+            }
+        }
+
+        return new OrderItemBulkStatusUpdateResponse(
+                changedItems.size(),
+                changedItems.stream().map(OrderItem::getMaChiTiet).toList(),
+                newItemStatus
+        );
     }
 
     @Transactional
