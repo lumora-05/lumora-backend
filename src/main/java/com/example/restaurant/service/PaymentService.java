@@ -209,7 +209,9 @@ public class PaymentService {
         if (orderId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã đơn hàng không hợp lệ");
         }
-        Order order = orderRepository.findById(orderId)
+        // Khóa đơn trong suốt quá trình tạo/lấy lại QR để nhiều request đồng thời
+        // (reload trang, retry frontend...) không thể tạo hai giao dịch payOS cho cùng một đơn.
+        Order order = orderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Không tìm thấy đơn hàng: " + orderId

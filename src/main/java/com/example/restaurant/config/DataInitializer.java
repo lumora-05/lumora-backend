@@ -7,6 +7,7 @@ import com.example.restaurant.service.QrCodeService;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.math.BigDecimal;
@@ -23,8 +24,12 @@ public class DataInitializer {
                                DiningTableRepository diningTableRepository,
                                PasswordEncoder passwordEncoder,
                                QrCodeService qrCodeService,
-                               OrderItemUnitUpgradeService orderItemUnitUpgradeService) {
+                               OrderItemUnitUpgradeService orderItemUnitUpgradeService,
+                               JdbcTemplate jdbcTemplate) {
         return args -> {
+            // Tương thích DB đã tạo trước khi đơn online dùng payOS: khách tự mở QR nên
+            // giao dịch không có nhân viên khởi tạo. Câu lệnh idempotent, chạy lại an toàn.
+            jdbcTemplate.execute("ALTER TABLE IF EXISTS giao_dich_payos ALTER COLUMN ma_nhan_vien DROP NOT NULL");
             Role adminRole = roleRepository.findByTenVaiTro("ADMIN")
                     .orElseGet(() -> roleRepository.save(new Role("ADMIN")));
             roleRepository.findByTenVaiTro("WAITER")
