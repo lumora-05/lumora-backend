@@ -423,8 +423,22 @@ public class VietMapService {
         if (!StringUtils.hasText(required)) {
             return true;
         }
+
         String needle = normalizeText(required);
-        return normalizeText(structuredValue).contains(needle) || normalizeText(display).contains(needle);
+        String structured = normalizeText(structuredValue);
+
+        // Ưu tiên tuyệt đối trường tỉnh/thành phố có cấu trúc mà VietMap trả về.
+        // Không fallback sang toàn bộ display khi structuredValue đã có dữ liệu, vì tên
+        // đường có thể trùng tên tỉnh/thành phố (ví dụ: "137 Đà Nẵng, ... Hải Phòng").
+        if (StringUtils.hasText(structured)) {
+            return structured.contains(needle);
+        }
+
+        // Một số response cũ có thể thiếu city/boundary. Khi đó chỉ chấp nhận nếu
+        // địa chỉ hiển thị KẾT THÚC bằng tỉnh/thành phố yêu cầu, thay vì contains().
+        // Nhờ vậy "..., Đà Nẵng" vẫn hợp lệ nhưng "137 Đà Nẵng, ..., Hải Phòng" bị loại.
+        String normalizedDisplay = normalizeText(display);
+        return normalizedDisplay.equals(needle) || normalizedDisplay.endsWith(" " + needle);
     }
 
     private String extractLeadingHouseNumber(String text) {
