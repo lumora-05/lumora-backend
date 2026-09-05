@@ -78,7 +78,10 @@ public class CustomerController {
     @PostMapping("/orders")
     public ResponseEntity<ApiResponse<Order>> createOrder(@Valid @RequestBody OrderCreateRequest request) {
         Order order = orderService.createCustomerOrder(request);
-        return ResponseEntity.ok(ApiResponse.success("Đã gửi đơn hàng trực tiếp vào bếp", order));
+        return ResponseEntity.ok(ApiResponse.success(
+                "Đã gửi đơn hàng, vui lòng chờ nhân viên phục vụ xác nhận",
+                order
+        ));
     }
 
     @GetMapping("/qr/{qrToken}/orders/{orderId}")

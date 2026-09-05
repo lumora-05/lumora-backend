@@ -44,15 +44,33 @@ public class RealtimeNotificationService {
     }
 
     public void notifyNewOrder(Object data) {
-        // Phục vụ nhận thông báo để theo dõi đơn mới; không cần xác nhận trước khi bếp chế biến.
+        // Dùng cho đơn do phục vụ tạo: đơn đã được xác nhận và chuyển thẳng xuống bếp.
         send("/topic/orders", "NEW_ORDER", "Có đơn hàng mới", data);
         firebasePushNotificationService.sendToChannel(
                 "WAITER",
                 "Có đơn hàng mới",
-                "Khách vừa gửi đơn. Đơn đã được chuyển xuống bếp.",
+                "Đơn mới đã được tạo và chuyển xuống bếp.",
                 "/waiter/orders",
                 "waiter-new-order",
                 false
+        );
+    }
+
+    public void notifyCustomerOrderPendingConfirmation(Order order) {
+        send(
+                "/topic/orders",
+                "ORDER_WAITING_CONFIRMATION",
+                "Khách vừa gửi đơn, đang chờ phục vụ xác nhận",
+                order
+        );
+        firebasePushNotificationService.sendToChannel(
+                "WAITER",
+                "Có đơn chờ xác nhận",
+                "Bàn " + (order.getBanAn() == null ? "" : order.getBanAn().getTenBan())
+                        + " vừa gửi đơn. Vui lòng kiểm tra và xác nhận trước khi chuyển xuống bếp.",
+                "/waiter/orders/" + order.getMaDonHang(),
+                "waiter-order-confirm-" + order.getMaDonHang(),
+                true
         );
     }
 
@@ -81,14 +99,21 @@ public class RealtimeNotificationService {
         payload.put("tienGiam", order.getTienGiam());
         payload.put("tongTien", order.getTongTien());
 
-        send("/topic/orders", "ORDER_ITEMS_ADDED", "Đơn hàng vừa được gọi thêm món", payload);
+        send(
+                "/topic/orders",
+                notifyKitchen ? "ORDER_ITEMS_ADDED" : "ORDER_ITEMS_WAITING_CONFIRMATION",
+                notifyKitchen ? "Đơn hàng vừa được gọi thêm món" : "Khách vừa gọi thêm món, đang chờ phục vụ xác nhận",
+                payload
+        );
         firebasePushNotificationService.sendToChannel(
                 "WAITER",
-                "Khách vừa gọi thêm món",
-                "Đơn #" + order.getMaDonHang() + " vừa có món gọi thêm và đã chuyển xuống bếp.",
+                notifyKitchen ? "Đơn vừa gọi thêm món" : "Có món gọi thêm chờ xác nhận",
+                notifyKitchen
+                        ? "Đơn #" + order.getMaDonHang() + " vừa có món gọi thêm và đã chuyển xuống bếp."
+                        : "Đơn #" + order.getMaDonHang() + " vừa có món gọi thêm. Vui lòng xác nhận trước khi chuyển xuống bếp.",
                 "/waiter/orders/" + order.getMaDonHang(),
                 "waiter-order-items-added-" + order.getMaDonHang(),
-                false
+                !notifyKitchen
         );
         if (notifyKitchen) {
             send("/topic/kitchen", "NEW_KITCHEN_ITEMS", "Bếp có món gọi thêm cần chế biến", payload);
@@ -102,6 +127,25 @@ public class RealtimeNotificationService {
             );
         }
         send("/topic/cashier", "ORDER_TOTAL_CHANGED", "Tổng tiền đơn hàng đã thay đổi", payload);
+    }
+
+    public void notifyKitchenItemsConfirmed(Order order, Object confirmedItems) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("maDonHang", order.getMaDonHang());
+        payload.put("maBan", order.getBanAn() == null ? null : order.getBanAn().getMaBan());
+        payload.put("tenBan", order.getBanAn() == null ? null : order.getBanAn().getTenBan());
+        payload.put("monMoi", confirmedItems);
+        payload.put("tongTien", order.getTongTien());
+
+        send("/topic/kitchen", "NEW_KITCHEN_ITEMS", "Phục vụ vừa xác nhận món gọi thêm", payload);
+        firebasePushNotificationService.sendToChannel(
+                "KITCHEN",
+                "Bếp có món gọi thêm",
+                "Đơn #" + order.getMaDonHang() + " có món mới đã được phục vụ xác nhận.",
+                "/kitchen/orders",
+                "kitchen-confirmed-items-" + order.getMaDonHang(),
+                true
+        );
     }
 
     public void notifyOrderStatusChanged(Object data) {

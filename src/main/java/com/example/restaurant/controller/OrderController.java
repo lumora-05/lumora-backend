@@ -208,6 +208,20 @@ public class OrderController {
     }
 
     /**
+     * Phục vụ xác nhận đơn/món do khách tại bàn gửi trước khi bếp được phép xử lý.
+     */
+    @PostMapping("/{id}/confirm")
+    @PreAuthorize("hasRole('WAITER')")
+    public ResponseEntity<ApiResponse<Order>> confirmCustomerOrder(@PathVariable Integer id,
+                                                                    Authentication authentication) {
+        Order order = orderService.confirmCustomerOrder(id, authentication.getName());
+        return ResponseEntity.ok(ApiResponse.success(
+                "Đã xác nhận đơn hàng và chuyển món xuống bếp",
+                order
+        ));
+    }
+
+    /**
      * Nhân viên phục vụ ghi nhận yêu cầu thanh toán khi khách gọi trực tiếp.
      * Endpoint nghiệp vụ riêng, không cho frontend truyền trạng thái tùy ý.
      */

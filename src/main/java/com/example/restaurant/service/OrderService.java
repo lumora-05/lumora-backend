@@ -92,14 +92,16 @@ public class OrderService {
 
     /** Trạng thái đơn cần làm nổi bật trên badge của phục vụ. */
     private static final Set<String> WAITER_ATTENTION_ORDER_STATUSES = Set.of(
+            "CHO_XAC_NHAN",
             "SAN_SANG",
             "SAN_SANG_PHUC_VU",
             "CHO_THANH_TOAN",
             "SAN_SANG_THANH_TOAN"
     );
 
-    /** Trạng thái món đã hoàn thành nhưng còn chờ phục vụ mang ra bàn. */
+    /** Trạng thái món cần phục vụ chú ý: chờ duyệt từ khách hoặc đã sẵn sàng mang ra bàn. */
     private static final Set<String> WAITER_READY_ITEM_STATUSES = Set.of(
+            "CHO_XAC_NHAN",
             "HOAN_THANH",
             "DA_HOAN_THANH",
             "SAN_SANG",
@@ -118,8 +120,9 @@ public class OrderService {
             "CHO_DEN_GIO"
     );
 
-    /** Món bị hủy/đang chờ duyệt hủy không hiển thị trên bảng bếp. */
+    /** Món chưa được phục vụ xác nhận, bị hủy hoặc đang chờ duyệt hủy không hiển thị trên bảng bếp. */
     private static final Set<String> KITCHEN_HIDDEN_ITEM_STATUSES = Set.of(
+            "CHO_XAC_NHAN",
             "DA_HUY",
             "YEU_CAU_HUY"
     );
@@ -585,6 +588,7 @@ public class OrderService {
         return orderItemRepository.findByTrangThaiMon(normalizeStatus(status)).stream()
                 .filter(item -> item.getDonHang() != null)
                 .filter(item -> !isHiddenFromKitchen(item.getDonHang()))
+                .filter(item -> !KITCHEN_HIDDEN_ITEM_STATUSES.contains(normalizeStatus(item.getTrangThaiMon())))
                 .toList();
     }
 
@@ -641,8 +645,9 @@ public class OrderService {
     }
 
     /**
-     * Khách tạo đơn: hệ thống xác nhận tự động, chuyển món trực tiếp vào bếp
-     * và đồng thời thông báo cho nhân viên phục vụ theo dõi.
+     * Khách tạo đơn: phải chờ nhân viên phục vụ xác nhận trước khi bếp nhận món.
+     * Các lượt khách gọi thêm vào đơn đang phục vụ cũng được giữ riêng ở trạng thái
+     * CHO_XAC_NHAN trên từng món cho đến khi phục vụ duyệt.
      */
     @Transactional
     public Order createCustomerOrder(OrderCreateRequest request) {
@@ -691,9 +696,8 @@ public class OrderService {
             order.setBanAn(table);
             order.setMaNhomThanhToan(StringUtils.hasText(table.getMaNhomBan()) ? table.getMaNhomBan() : null);
             order.setGhiChu(trimToNull(request.ghiChu()));
-            // Đơn do khách quét QR hoặc phục vụ tạo đều được chuyển thẳng xuống bếp.
-            // Giữ trạng thái DA_XAC_NHAN để tương thích với luồng bếp và frontend hiện tại.
-            order.setTrangThai("DA_XAC_NHAN");
+            // Đơn do khách quét QR phải chờ phục vụ xác nhận; đơn do phục vụ tạo được xác nhận ngay.
+            order.setTrangThai(createdByStaff ? "DA_XAC_NHAN" : "CHO_XAC_NHAN");
             order.setTamTinh(BigDecimal.ZERO);
             order.setTienGiam(BigDecimal.ZERO);
             order.setTongTien(BigDecimal.ZERO);
@@ -716,6 +720,9 @@ public class OrderService {
         int callNumber = nextCallNumber(order);
         LocalDateTime addedAt = LocalDateTime.now();
         List<OrderItem> newItems = new ArrayList<>();
+        boolean customerAdditionalPendingConfirmation = !createdByStaff
+                && !newOrder
+                && !"CHO_XAC_NHAN".equals(previousStatus);
 
         for (OrderCreateRequest.Item reqItem : request.items()) {
             Food food = foodRepository.findById(reqItem.maMonAn())
@@ -738,7 +745,7 @@ public class OrderService {
                 item.setSoLuong(1);
                 item.setDonGia(food.getGia());
                 item.setGhiChu(trimToNull(reqItem.ghiChu()));
-                item.setTrangThaiMon("CHO_BEP");
+                item.setTrangThaiMon(customerAdditionalPendingConfirmation ? "CHO_XAC_NHAN" : "CHO_BEP");
                 item.setLanGoi(callNumber);
                 item.setThoiGianThem(addedAt);
                 order.addItem(item);
@@ -757,7 +764,10 @@ public class OrderService {
                             "Vui lòng xử lý yêu cầu hủy món trước khi xác nhận đơn"
                     );
                 }
-                // Phục vụ nhập món cho đơn khách vừa gửi: xác nhận luôn và chuyển vào bếp.
+                // Phục vụ nhập món cho đơn khách vừa gửi: xác nhận luôn và chuyển các món chờ duyệt vào bếp.
+                order.getChiTietDonHang().stream()
+                        .filter(item -> "CHO_XAC_NHAN".equals(normalizeStatus(item.getTrangThaiMon())))
+                        .forEach(item -> item.setTrangThaiMon("CHO_BEP"));
                 syncOrderTimestamps(order, previousStatus, "DA_XAC_NHAN");
                 order.setTrangThai("DA_XAC_NHAN");
             } else if (!"CHO_XAC_NHAN".equals(previousStatus)) {
@@ -781,9 +791,14 @@ public class OrderService {
                             + (createdByStaff ? " bởi nhân viên " + actingEmployee.getHoTen() : ""),
                     savedOrder.getMaDonHang()
             );
-            // Phục vụ nhận thông báo để theo dõi, đồng thời bếp nhận đơn ngay lập tức.
-            realtimeNotificationService.notifyNewOrder(savedOrder);
-            realtimeNotificationService.notifyKitchenOrderConfirmed(savedOrder);
+            if (createdByStaff) {
+                // Đơn do phục vụ tạo được xác nhận ngay và chuyển thẳng xuống bếp.
+                realtimeNotificationService.notifyNewOrder(savedOrder);
+                realtimeNotificationService.notifyKitchenOrderConfirmed(savedOrder);
+            } else {
+                // Đơn do khách gửi chỉ thông báo cho phục vụ; bếp chưa được nhận trước khi xác nhận.
+                realtimeNotificationService.notifyCustomerOrderPendingConfirmation(savedOrder);
+            }
         } else {
             systemActivityService.record(
                     "ORDER_ITEMS_ADDED",
@@ -791,7 +806,8 @@ public class OrderService {
                             + " với " + newItems.size() + " món",
                     savedOrder.getMaDonHang()
             );
-            boolean confirmedForKitchen = !"CHO_XAC_NHAN".equals(normalizeStatus(savedOrder.getTrangThai()));
+            boolean confirmedForKitchen = createdByStaff
+                    && !"CHO_XAC_NHAN".equals(normalizeStatus(savedOrder.getTrangThai()));
             realtimeNotificationService.notifyOrderItemsAdded(
                     savedOrder,
                     newItems,
@@ -800,6 +816,87 @@ public class OrderService {
             );
         }
 
+        realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
+        realtimeNotificationService.notifyDashboardRefresh(savedOrder);
+        return savedOrder;
+    }
+
+    /**
+     * Phục vụ xác nhận đơn/món do khách gửi.
+     * - Đơn mới CHO_XAC_NHAN: chuyển đơn sang DA_XAC_NHAN và cho bếp nhận toàn bộ món.
+     * - Đơn đang phục vụ có món gọi thêm CHO_XAC_NHAN: chỉ duyệt các món đó sang CHO_BEP,
+     *   không làm gián đoạn các món cũ đang chế biến.
+     */
+    @Transactional
+    public Order confirmCustomerOrder(Integer orderId, String username) {
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Không tìm thấy đơn hàng: " + orderId
+                ));
+        if (order.isDeliveryOrder()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Đơn giao hàng không sử dụng bước xác nhận của phục vụ tại bàn"
+            );
+        }
+
+        Employee waiter = resolveActiveWaiterByUsername(username);
+        ensureWaiterCanAccessOrder(waiter, order);
+
+        String oldStatus = normalizeStatus(order.getTrangThai());
+        if (Set.of("CHO_THANH_TOAN", "SAN_SANG_THANH_TOAN", "DA_THANH_TOAN", "DA_HUY").contains(oldStatus)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Đơn hàng không còn ở trạng thái có thể xác nhận"
+            );
+        }
+        if (hasPendingItemCancellation(order)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Vui lòng xử lý yêu cầu hủy món trước khi xác nhận đơn"
+            );
+        }
+
+        List<OrderItem> pendingItems = order.getChiTietDonHang() == null
+                ? new ArrayList<>()
+                : order.getChiTietDonHang().stream()
+                        .filter(item -> "CHO_XAC_NHAN".equals(normalizeStatus(item.getTrangThaiMon())))
+                        .toList();
+
+        boolean pendingWholeOrder = "CHO_XAC_NHAN".equals(oldStatus);
+        if (!pendingWholeOrder && pendingItems.isEmpty()) {
+            // Idempotent: đơn đã được xác nhận và không còn món gọi thêm chờ duyệt.
+            return order;
+        }
+
+        pendingItems.forEach(item -> item.setTrangThaiMon("CHO_BEP"));
+        order.setNhanVien(waiter);
+
+        if (pendingWholeOrder) {
+            syncOrderTimestamps(order, oldStatus, "DA_XAC_NHAN");
+            order.setTrangThai("DA_XAC_NHAN");
+        } else {
+            // Nếu đơn đã phục vụ xong nhưng khách gọi thêm, mở lại đúng trạng thái theo các món hiện có.
+            synchronizeOrderStatusFromItems(order, true);
+        }
+
+        Order savedOrder = orderRepository.saveAndFlush(order);
+        systemActivityService.record(
+                pendingWholeOrder ? "ORDER_CONFIRMED" : "ORDER_ADDITIONAL_ITEMS_CONFIRMED",
+                pendingWholeOrder
+                        ? "Đơn hàng #DH" + savedOrder.getMaDonHang() + " đã được phục vụ xác nhận và chuyển xuống bếp"
+                        : "Đơn hàng #DH" + savedOrder.getMaDonHang() + " đã được phục vụ xác nhận "
+                                + pendingItems.size() + " món gọi thêm",
+                savedOrder.getMaDonHang()
+        );
+
+        if (pendingWholeOrder) {
+            realtimeNotificationService.notifyOrderStatusChanged(savedOrder);
+            realtimeNotificationService.notifyKitchenOrderConfirmed(savedOrder);
+        } else {
+            realtimeNotificationService.notifyKitchenItemsConfirmed(savedOrder, pendingItems);
+        }
         realtimeNotificationService.notifyCustomerOrderChanged(savedOrder);
         realtimeNotificationService.notifyDashboardRefresh(savedOrder);
         return savedOrder;
@@ -865,6 +962,14 @@ public class OrderService {
 
         if ("DA_HUY".equals(newStatus)) {
             promotionService.releaseForCancelledOrder(order);
+        }
+
+        if ("CHO_XAC_NHAN".equals(oldStatus) && "DA_XAC_NHAN".equals(newStatus)
+                && order.getChiTietDonHang() != null) {
+            // Bảo đảm mọi món đang chờ phục vụ duyệt chỉ được vào bếp sau thao tác xác nhận.
+            order.getChiTietDonHang().stream()
+                    .filter(item -> "CHO_XAC_NHAN".equals(normalizeStatus(item.getTrangThaiMon())))
+                    .forEach(item -> item.setTrangThaiMon("CHO_BEP"));
         }
 
         order.setTrangThai(newStatus);
