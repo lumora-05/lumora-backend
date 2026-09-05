@@ -76,10 +76,11 @@ public class DeliveryOrderController {
     /** Xác nhận đơn sau khi kiểm tra thông tin khách, địa chỉ, món và thanh toán. */
     @PostMapping("/{orderId}/confirm")
     @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
-    public ResponseEntity<ApiResponse<Order>> confirm(@PathVariable Integer orderId) {
+    public ResponseEntity<ApiResponse<Order>> confirm(@PathVariable Integer orderId, Principal principal) {
+        String username = principal == null ? null : principal.getName();
         return ResponseEntity.ok(ApiResponse.success(
                 "Đã xác nhận đơn giao hàng",
-                deliveryOrderService.confirmOrder(orderId)
+                deliveryOrderService.confirmOrder(orderId, username)
         ));
     }
 

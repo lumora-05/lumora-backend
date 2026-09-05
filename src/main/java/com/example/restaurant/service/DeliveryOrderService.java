@@ -462,7 +462,7 @@ public class DeliveryOrderService {
         return toTrackingResponse(delivery.getDonHang());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public VietQrResponse createVietQr(String trackingToken) {
         OrderDelivery delivery = deliveryRepository.findByTrackingToken(requiredText(
                 trackingToken,
@@ -514,20 +514,89 @@ public class DeliveryOrderService {
 
     @Transactional
     public Order confirmVietQrPayment(Integer orderId, DeliveryPaymentConfirmRequest request, String username) {
+        Employee processor = requireDeliveryProcessor(username);
+        String transactionCode = requiredText(request.maGiaoDich(), "Mã giao dịch không hợp lệ");
+        return applyConfirmedVietQrPayment(
+                orderId,
+                transactionCode,
+                null,
+                trimToNull(request.ghiChu()),
+                processor,
+                false
+        );
+    }
+
+    /**
+     * payOS gọi gián tiếp qua PaymentService sau khi webhook đã được xác minh chữ ký và số tiền.
+     * Không cần nhân viên xác nhận thủ công; đơn vẫn chuyển sang bước chờ nhà hàng xác nhận.
+     */
+    @Transactional
+    public Order confirmPayOsVietQrPayment(Integer orderId, String transactionCode, BigDecimal paidAmount) {
+        return applyConfirmedVietQrPayment(
+                orderId,
+                requiredText(transactionCode, "Mã tham chiếu payOS không hợp lệ"),
+                money(paidAmount),
+                "Thanh toán được xác nhận tự động qua payOS",
+                null,
+                true
+        );
+    }
+
+    private Order applyConfirmedVietQrPayment(Integer orderId,
+                                               String transactionCode,
+                                               BigDecimal paidAmount,
+                                               String paymentNote,
+                                               Employee processor,
+                                               boolean automatic) {
         Order order = lockDeliveryOrder(orderId);
         OrderDelivery delivery = order.getGiaoHang();
         if (!PAYMENT_VIETQR.equals(normalize(delivery.getPhuongThucThanhToan()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng không sử dụng VietQR");
         }
-        requireDeliveryStatus(delivery, DELIVERY_WAITING_PAYMENT);
-        if (PAYMENT_PAID.equals(normalize(delivery.getTrangThaiThanhToan()))) {
-            return order;
+
+        String paymentStatus = normalize(delivery.getTrangThaiThanhToan());
+        if (PAYMENT_PAID.equals(paymentStatus)) {
+            String existingCode = trimToNull(delivery.getMaGiaoDich());
+            if (existingCode == null || existingCode.equalsIgnoreCase(transactionCode)) {
+                return order;
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng đã được ghi nhận bằng giao dịch khác");
         }
-        if (isPaymentDeadlineExpired(delivery)) {
+
+        String deliveryStatus = normalize(delivery.getTrangThaiGiaoHang());
+        BigDecimal received = paidAmount == null ? null : money(paidAmount);
+
+        // Trường hợp hiếm: khách vừa hủy/hết hạn trong lúc ngân hàng đã nhận tiền.
+        // Không khôi phục đơn; ghi nhận tiền để đưa đúng vào hàng chờ hoàn.
+        if (automatic && DELIVERY_CANCELLED.equals(deliveryStatus)) {
+            if (received == null || received.signum() <= 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Số tiền payOS không hợp lệ");
+            }
+            delivery.setMaGiaoDich(transactionCode);
+            delivery.setSoTienDaThanhToan(received);
+            delivery.setGhiChuThanhToan(paymentNote);
+            delivery.setThoiGianHetHanThanhToan(null);
+            delivery.setTrangThaiThanhToan(PAYMENT_REFUND_PENDING);
+            delivery.setSoTienCanHoan(received.subtract(money(delivery.getSoTienDaHoan()))
+                    .max(BigDecimal.ZERO.setScale(2)));
+            Order savedOrder = orderRepository.saveAndFlush(order);
+            systemActivityService.record(
+                    "DELIVERY_PAYOS_LATE_PAYMENT_REFUND_REQUIRED",
+                    "payOS đã nhận tiền cho đơn đã hủy #DH" + savedOrder.getMaDonHang() + "; chờ hoàn tiền",
+                    savedOrder.getMaDonHang());
+            realtimeNotificationService.notifyDeliveryOrderChanged(
+                    "DELIVERY_REFUND_REQUIRED",
+                    "Đã nhận thanh toán sau khi đơn bị hủy; đơn đang chờ hoàn tiền",
+                    savedOrder);
+            realtimeNotificationService.notifyDashboardRefresh(savedOrder);
+            return savedOrder;
+        }
+
+        requireDeliveryStatus(delivery, DELIVERY_WAITING_PAYMENT);
+        if (isPaymentDeadlineExpired(delivery) && !automatic) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Thời hạn thanh toán VietQR đã hết");
         }
 
-        String transactionCode = requiredText(request.maGiaoDich(), "Mã giao dịch không hợp lệ");
         if (deliveryRepository.existsByMaGiaoDichIgnoreCase(transactionCode)
                 || invoiceRepository.existsByMaGiaoDichIgnoreCase(transactionCode)
                 || refundRepository.existsByMaGiaoDichIgnoreCase(transactionCode)) {
@@ -535,10 +604,39 @@ public class DeliveryOrderService {
         }
 
         orderPricingService.recalculate(order);
-        BigDecimal received = money(order.getTongTien());
+        BigDecimal currentTotal = money(order.getTongTien());
+        if (received == null) {
+            received = currentTotal;
+        }
+        if (automatic && received.compareTo(currentTotal) != 0) {
+            delivery.setMaGiaoDich(transactionCode);
+            delivery.setSoTienDaThanhToan(received);
+            delivery.setGhiChuThanhToan(paymentNote);
+            delivery.setThoiGianHetHanThanhToan(null);
+            order.getChiTietDonHang().forEach(item -> item.setTrangThaiMon("DA_HUY"));
+            order.setTrangThai(DELIVERY_CANCELLED);
+            delivery.setTrangThaiGiaoHang(DELIVERY_CANCELLED);
+            delivery.setTrangThaiThanhToan(PAYMENT_REFUND_PENDING);
+            delivery.setSoTienCanHoan(received);
+            delivery.setLyDoTuChoi("Số tiền payOS không còn khớp tổng tiền hiện tại; chờ hoàn tiền");
+            delivery.setThoiGianHuy(LocalDateTime.now());
+            promotionService.releaseForCancelledOrder(order);
+            Order savedOrder = orderRepository.saveAndFlush(order);
+            systemActivityService.record(
+                    "DELIVERY_PAYOS_AMOUNT_CHANGED_REFUND_REQUIRED",
+                    "Đơn #DH" + savedOrder.getMaDonHang() + " nhận payOS nhưng tổng tiền đã thay đổi; chờ hoàn tiền",
+                    savedOrder.getMaDonHang());
+            realtimeNotificationService.notifyDeliveryOrderChanged(
+                    "DELIVERY_REFUND_REQUIRED",
+                    "Thanh toán đã nhận nhưng tổng tiền thay đổi; đơn đang chờ hoàn tiền",
+                    savedOrder);
+            realtimeNotificationService.notifyDashboardRefresh(savedOrder);
+            return savedOrder;
+        }
+
         delivery.setMaGiaoDich(transactionCode);
         delivery.setSoTienDaThanhToan(received);
-        delivery.setGhiChuThanhToan(trimToNull(request.ghiChu()));
+        delivery.setGhiChuThanhToan(paymentNote);
         delivery.setThoiGianHetHanThanhToan(null);
 
         ResponseStatusException inventoryError = null;
@@ -549,29 +647,33 @@ public class DeliveryOrderService {
         }
 
         if (inventoryError == null) {
-            // Ghi nhớ nhân viên đã xác minh khoản VietQR để hệ thống có thể tự tạo
-            // hóa đơn khi đối tác vận chuyển báo giao thành công.
-            order.setNhanVien(requireDeliveryProcessor(username));
-            // Thanh toán xong vẫn phải chờ nhà hàng xác nhận trước khi bếp nhận món.
+            // Với xác nhận thủ công cũ, lưu luôn nhân viên xác minh. Với payOS tự động,
+            // nhân viên phụ trách sẽ được gắn khi nhà hàng bấm xác nhận đơn.
+            if (processor != null) {
+                order.setNhanVien(processor);
+            }
             delivery.setTrangThaiThanhToan(PAYMENT_PAID);
             delivery.setTrangThaiGiaoHang(DELIVERY_PENDING_CONFIRMATION);
             order.setTrangThai(DELIVERY_PENDING_CONFIRMATION);
             Order savedOrder = orderRepository.saveAndFlush(order);
 
             systemActivityService.record(
-                    "DELIVERY_VIETQR_PAID_PENDING_CONFIRMATION",
-                    "VietQR đã được ghi nhận cho đơn giao hàng #DH" + savedOrder.getMaDonHang()
-                            + "; đơn đang chờ nhà hàng xác nhận",
+                    automatic ? "DELIVERY_PAYOS_PAID_PENDING_CONFIRMATION" : "DELIVERY_VIETQR_PAID_PENDING_CONFIRMATION",
+                    (automatic ? "payOS đã tự động xác nhận thanh toán cho đơn giao hàng #DH"
+                            : "VietQR đã được ghi nhận cho đơn giao hàng #DH")
+                            + savedOrder.getMaDonHang() + "; đơn đang chờ nhà hàng xác nhận",
                     savedOrder.getMaDonHang());
             realtimeNotificationService.notifyDeliveryOrderChanged(
-                    "DELIVERY_PAYMENT_CONFIRMED",
-                    "Đã nhận thanh toán VietQR; đơn đang chờ nhà hàng xác nhận",
+                    automatic ? "DELIVERY_PAYOS_PAYMENT_CONFIRMED" : "DELIVERY_PAYMENT_CONFIRMED",
+                    automatic
+                            ? "payOS đã xác nhận thanh toán; đơn đang chờ nhà hàng xác nhận"
+                            : "Đã nhận thanh toán VietQR; đơn đang chờ nhà hàng xác nhận",
                     savedOrder);
             realtimeNotificationService.notifyDashboardRefresh(savedOrder);
             return savedOrder;
         }
 
-        // Tiền đã vào nhưng món/ nguyên liệu không còn đủ: hủy và đưa toàn bộ số tiền vào hàng chờ hoàn.
+        // Tiền đã vào nhưng món/nguyên liệu không còn đủ: hủy và đưa toàn bộ số tiền vào hàng chờ hoàn.
         order.getChiTietDonHang().forEach(item -> item.setTrangThaiMon("DA_HUY"));
         order.setTrangThai(DELIVERY_CANCELLED);
         delivery.setTrangThaiGiaoHang(DELIVERY_CANCELLED);
@@ -600,9 +702,10 @@ public class DeliveryOrderService {
 
     /** Nhà hàng xác nhận đơn sau khi đã kiểm tra thông tin, món và thanh toán. */
     @Transactional
-    public Order confirmOrder(Integer orderId) {
+    public Order confirmOrder(Integer orderId, String username) {
         Order order = lockDeliveryOrder(orderId);
         OrderDelivery delivery = order.getGiaoHang();
+        Employee processor = requireDeliveryProcessor(username);
         requireDeliveryStatus(delivery, DELIVERY_PENDING_CONFIRMATION);
 
         if (PAYMENT_VIETQR.equals(normalize(delivery.getPhuongThucThanhToan()))
@@ -613,6 +716,7 @@ public class DeliveryOrderService {
 
         foodTraceabilityService.validateAvailabilityForOrder(order);
         orderPricingService.recalculate(order);
+        order.setNhanVien(processor);
         LocalDateTime now = LocalDateTime.now();
         delivery.setThoiGianXacNhan(now);
         delivery.setLyDoTuChoi(null);

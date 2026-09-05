@@ -18,6 +18,7 @@ import com.example.restaurant.repository.EmployeeRepository;
 import com.example.restaurant.repository.InvoiceRepository;
 import com.example.restaurant.repository.OrderRepository;
 import com.example.restaurant.repository.PayOsPaymentRepository;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -90,6 +91,7 @@ public class PaymentService {
     private final LoyaltyService loyaltyService;
     private final PayOsGatewayService payOsGatewayService;
     private final PayOsPaymentRepository payOsPaymentRepository;
+    private final DeliveryOrderService deliveryOrderService;
 
     public PaymentService(InvoiceRepository invoiceRepository,
                           OrderRepository orderRepository,
@@ -102,7 +104,8 @@ public class PaymentService {
                           ReservationService reservationService,
                           LoyaltyService loyaltyService,
                           PayOsGatewayService payOsGatewayService,
-                          PayOsPaymentRepository payOsPaymentRepository) {
+                          PayOsPaymentRepository payOsPaymentRepository,
+                          @Lazy DeliveryOrderService deliveryOrderService) {
         this.invoiceRepository = invoiceRepository;
         this.orderRepository = orderRepository;
         this.employeeRepository = employeeRepository;
@@ -115,6 +118,7 @@ public class PaymentService {
         this.loyaltyService = loyaltyService;
         this.payOsGatewayService = payOsGatewayService;
         this.payOsPaymentRepository = payOsPaymentRepository;
+        this.deliveryOrderService = deliveryOrderService;
     }
 
     /**
@@ -190,11 +194,18 @@ public class PaymentService {
     }
 
     /**
-     * Tạo VietQR cho đơn giao hàng trước khi nhà hàng xác nhận chế biến.
-     * Khác đơn tại bàn, đơn giao hàng chưa ở trạng thái CHO_THANH_TOAN.
+     * Tạo VietQR payOS cho đơn giao hàng trước khi nhà hàng xác nhận chế biến.
+     * Khách tự mở QR, vì vậy giao dịch giao hàng không yêu cầu nhân viên khởi tạo.
+     * Webhook payOS sẽ tự ghi nhận thanh toán và chuyển đơn sang chờ nhà hàng xác nhận.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public VietQrResponse createVietQrForDelivery(Integer orderId) {
+        if (!payOsGatewayService.isConfigured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Chưa cấu hình payOS cho thanh toán tự động"
+            );
+        }
         if (orderId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã đơn hàng không hợp lệ");
         }
@@ -206,14 +217,84 @@ public class PaymentService {
         if (!"GIAO_HANG".equals(normalizeText(order.getLoaiDon())) || order.getGiaoHang() == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn giao hàng");
         }
+        if (!"VIETQR".equals(normalizeText(order.getGiaoHang().getPhuongThucThanhToan()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng không sử dụng phương thức VietQR");
+        }
+        if (!"CHO_THANH_TOAN".equals(normalizeText(order.getGiaoHang().getTrangThaiThanhToan()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng không còn chờ thanh toán VietQR");
+        }
         if (invoiceRepository.findByDonHang_MaDonHang(orderId).isPresent()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng đã có hóa đơn");
         }
+
         orderPricingService.recalculate(order);
-        if (order.getTongTien() == null || order.getTongTien().compareTo(BigDecimal.ZERO) <= 0) {
+        BigDecimal payable = normalizedMoney(order.getTongTien());
+        long amount = toPayOsAmount(payable);
+        if (amount <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Tổng tiền đơn hàng không hợp lệ");
         }
-        return buildVietQr(order);
+
+        LocalDateTime now = LocalDateTime.now();
+        List<PayOsPayment> pendingPayments = payOsPaymentRepository
+                .findByDonHang_MaDonHangAndTrangThaiOrderByThoiGianTaoDesc(orderId, "PENDING");
+        for (PayOsPayment pending : pendingPayments) {
+            if (pending.getHetHanLuc() != null && !pending.getHetHanLuc().isAfter(now)) {
+                pending.setTrangThai("EXPIRED");
+                payOsPaymentRepository.save(pending);
+                continue;
+            }
+            if (normalizedMoney(pending.getSoTien()).compareTo(payable) == 0
+                    && trimToNull(pending.getQrCode()) != null) {
+                return toPayOsVietQrResponse(pending);
+            }
+
+            payOsGatewayService.cancelPayment(pending.getPayOsOrderCode(), "Tạo yêu cầu thanh toán mới");
+            pending.setTrangThai("CANCELLED");
+            payOsPaymentRepository.save(pending);
+        }
+
+        LocalDateTime expiresAt = now.plusMinutes(payOsGatewayService.expireMinutes());
+        LocalDateTime deliveryDeadline = order.getGiaoHang().getThoiGianHetHanThanhToan();
+        if (deliveryDeadline != null && deliveryDeadline.isBefore(expiresAt)) {
+            expiresAt = deliveryDeadline;
+        }
+        if (!expiresAt.isAfter(now)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Thời hạn thanh toán VietQR đã hết");
+        }
+        PayOsPayment payment = new PayOsPayment();
+        payment.setDonHang(order);
+        payment.setNhanVienKhoiTao(null);
+        payment.setPayOsOrderCode(nextPayOsOrderCode());
+        payment.setSoTien(payable);
+        payment.setSoDienThoaiKhach(trimToNull(order.getGiaoHang().getSoDienThoaiNhan()));
+        payment.setDiemSuDung(0);
+        payment.setNoiDungChuyenKhoan(buildPayOsDescription(order.getMaDonHang()));
+        payment.setTrangThai("PENDING");
+        payment.setThoiGianTao(now);
+        payment.setHetHanLuc(expiresAt);
+        payOsPaymentRepository.saveAndFlush(payment);
+
+        PayOsGatewayService.CreatePaymentResult created = payOsGatewayService.createPayment(
+                payment.getPayOsOrderCode(),
+                amount,
+                payment.getNoiDungChuyenKhoan(),
+                expiresAt
+        );
+        if (created.orderCode() != payment.getPayOsOrderCode() || created.amount() != amount) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "payOS trả về sai mã giao dịch hoặc số tiền");
+        }
+
+        payment.setPaymentLinkId(trimToNull(created.paymentLinkId()));
+        payment.setBinNganHang(trimToNull(created.bin()));
+        payment.setSoTaiKhoan(trimToNull(created.accountNumber()));
+        payment.setTenTaiKhoan(trimToNull(created.accountName()));
+        payment.setQrCode(trimToNull(created.qrCode()));
+        payment.setCheckoutUrl(trimToNull(created.checkoutUrl()));
+        if (trimToNull(created.description()) != null) {
+            payment.setNoiDungChuyenKhoan(created.description().trim());
+        }
+        payOsPaymentRepository.saveAndFlush(payment);
+        return toPayOsVietQrResponse(payment);
     }
 
     /**
@@ -453,6 +534,24 @@ public class PaymentService {
         if (payOsPaymentRepository.existsByMaThamChieuIgnoreCase(reference)
                 && !reference.equalsIgnoreCase(trimToNull(payment.getMaThamChieu()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã tham chiếu payOS đã được sử dụng");
+        }
+
+        boolean deliveryPayment = "GIAO_HANG".equals(normalizeText(payment.getDonHang().getLoaiDon()))
+                && payment.getDonHang().getGiaoHang() != null;
+        if (deliveryPayment) {
+            Order updatedOrder = deliveryOrderService.confirmPayOsVietQrPayment(
+                    payment.getDonHang().getMaDonHang(),
+                    reference,
+                    normalizedMoney(payment.getSoTien())
+            );
+            payment.setTrangThai("PAID");
+            payment.setMaThamChieu(reference);
+            payment.setThoiGianThanhToan(LocalDateTime.now());
+            payOsPaymentRepository.saveAndFlush(payment);
+            return new PayOsWebhookResponse(
+                    true,
+                    "Đã tự động ghi nhận thanh toán payOS cho đơn giao hàng #DH" + updatedOrder.getMaDonHang()
+            );
         }
 
         Invoice invoice = completePayOsTablePayment(payment, reference);

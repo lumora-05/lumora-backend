@@ -29,9 +29,12 @@ public class PayOsPayment {
     @JoinColumn(name = "ma_don_hang", nullable = false)
     private Order donHang;
 
-    /** Nhân viên đã mở mã thanh toán; dùng để lưu người phụ trách trên hóa đơn tự động. */
-    @ManyToOne(fetch = FetchType.EAGER, optional = false)
-    @JoinColumn(name = "ma_nhan_vien", nullable = false)
+    /**
+     * Nhân viên đã mở mã thanh toán tại quầy. Với đơn online khách tự tạo QR nên có thể để trống;
+     * nhân viên xử lý đơn sẽ được ghi nhận khi nhà hàng xác nhận đơn.
+     */
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "ma_nhan_vien")
     private Employee nhanVienKhoiTao;
 
     @Column(name = "payos_order_code", nullable = false, unique = true)
