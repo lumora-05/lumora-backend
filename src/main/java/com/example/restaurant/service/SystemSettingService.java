@@ -646,6 +646,7 @@ public class SystemSettingService {
                 .reservationDepositAmount(setting.getReservationDepositAmount())
                 .reservationDepositPaymentTimeoutMinutes(setting.getReservationDepositPaymentTimeoutMinutes())
                 .reservationDepositRefundAdvanceMinutes(setting.getReservationDepositRefundAdvanceMinutes())
+                .deliveryMaxDistanceKm(setting.getDeliveryMaxDistanceKm())
                 .updatedAt(setting.getNgayCapNhat())
                 .build();
     }

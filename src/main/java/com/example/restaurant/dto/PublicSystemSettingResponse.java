@@ -29,5 +29,6 @@ public class PublicSystemSettingResponse {
     private BigDecimal reservationDepositAmount;
     private Integer reservationDepositPaymentTimeoutMinutes;
     private Integer reservationDepositRefundAdvanceMinutes;
+    private Double deliveryMaxDistanceKm;
     private LocalDateTime updatedAt;
 }
