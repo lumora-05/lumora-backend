@@ -478,13 +478,63 @@ public class DeliveryOrderService {
                     HttpStatus.CONFLICT,
                     "Đơn hàng hiện không ở bước chờ thanh toán VietQR");
         }
-        if (!PAYMENT_WAITING.equals(normalize(delivery.getTrangThaiThanhToan()))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng không còn chờ thanh toán VietQR");
+        String paymentStatus = normalize(delivery.getTrangThaiThanhToan());
+        if (!Set.of(PAYMENT_WAITING, PAYMENT_EXPIRED).contains(paymentStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng không còn ở bước chờ thanh toán QR");
         }
-        if (isPaymentDeadlineExpired(delivery)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Thời hạn thanh toán VietQR đã hết");
+
+        Order order = lockOrder(delivery.getDonHang().getMaDonHang());
+        OrderDelivery lockedDelivery = order.getGiaoHang();
+        if (!DELIVERY_WAITING_PAYMENT.equals(normalize(lockedDelivery.getTrangThaiGiaoHang()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng hiện không ở bước chờ thanh toán QR");
         }
-        return paymentService.createVietQrForDelivery(delivery.getDonHang().getMaDonHang());
+        String lockedPaymentStatus = normalize(lockedDelivery.getTrangThaiThanhToan());
+        if (!Set.of(PAYMENT_WAITING, PAYMENT_EXPIRED).contains(lockedPaymentStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đơn hàng không còn ở bước chờ thanh toán QR");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime maxHoldDeadline = paymentHoldDeadline(order);
+        if (maxHoldDeadline != null && !maxHoldDeadline.isAfter(now)) {
+            expireUnpaidVietQrOrder(order);
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Đơn hàng đã quá thời gian giữ chờ thanh toán. Vui lòng đặt lại đơn"
+            );
+        }
+
+        boolean needsNewPaymentSession = PAYMENT_EXPIRED.equals(lockedPaymentStatus)
+                || lockedDelivery.getThoiGianHetHanThanhToan() == null
+                || isPaymentDeadlineExpired(lockedDelivery);
+        if (needsNewPaymentSession) {
+            int timeoutMinutes = positiveOrDefault(deliveryProperties.getPaymentTimeoutMinutes(), 15);
+            LocalDateTime newDeadline = now.plusMinutes(timeoutMinutes);
+            if (maxHoldDeadline != null && maxHoldDeadline.isBefore(newDeadline)) {
+                newDeadline = maxHoldDeadline;
+            }
+            if (!newDeadline.isAfter(now)) {
+                expireUnpaidVietQrOrder(order);
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Đơn hàng đã quá thời gian giữ chờ thanh toán. Vui lòng đặt lại đơn"
+                );
+            }
+
+            lockedDelivery.setTrangThaiThanhToan(PAYMENT_WAITING);
+            lockedDelivery.setThoiGianHetHanThanhToan(newDeadline);
+            orderRepository.saveAndFlush(order);
+            systemActivityService.record(
+                    "DELIVERY_PAYMENT_SESSION_RENEWED",
+                    "Khách tạo lại phiên thanh toán QR cho đơn giao hàng #DH" + order.getMaDonHang(),
+                    order.getMaDonHang());
+            // Chỉ cập nhật realtime trạng thái. Không phát sự kiện đơn mới/chờ xác nhận cho thu ngân.
+            realtimeNotificationService.notifyDeliveryOrderChanged(
+                    "DELIVERY_PAYMENT_SESSION_RENEWED",
+                    "Phiên thanh toán QR đã được tạo lại",
+                    order);
+        }
+
+        return paymentService.createVietQrForDelivery(order.getMaDonHang());
     }
 
     @Transactional
@@ -1182,7 +1232,7 @@ public class DeliveryOrderService {
         return savedOrder;
     }
 
-    /** Chạy định kỳ: điều phối tài xế theo ETA và tự hủy VietQR hết hạn. */
+    /** Chạy định kỳ: điều phối tài xế theo ETA và quản lý vòng đời phiên thanh toán QR. */
     @Transactional
     public void performMaintenance() {
         List<Order> orders = orderRepository.findByLoaiDonOrderByThoiGianDatDescMaDonHangDesc(ORDER_TYPE_DELIVERY);
@@ -1228,35 +1278,75 @@ public class DeliveryOrderService {
                 realtimeNotificationService.notifyDashboardRefresh(order);
             }
 
-            if (DELIVERY_WAITING_PAYMENT.equals(status)
-                    && PAYMENT_WAITING.equals(normalize(delivery.getTrangThaiThanhToan()))
-                    && isPaymentDeadlineExpired(delivery)) {
-                expireUnpaidVietQrOrder(order);
+            if (DELIVERY_WAITING_PAYMENT.equals(status)) {
+                String paymentStatus = normalize(delivery.getTrangThaiThanhToan());
+                if (Set.of(PAYMENT_WAITING, PAYMENT_EXPIRED).contains(paymentStatus)
+                        && isPaymentHoldDeadlineExpired(order)) {
+                    expireUnpaidVietQrOrder(order);
+                    continue;
+                }
+                if (PAYMENT_WAITING.equals(paymentStatus) && isPaymentDeadlineExpired(delivery)) {
+                    expireVietQrPaymentSession(order);
+                }
             }
         }
     }
 
+    /**
+     * Chỉ hết hạn một phiên/mã QR. Đơn và toàn bộ snapshot món/giá vẫn được giữ để
+     * khách có thể tạo lại mã thanh toán mà không phải đặt lại từ đầu.
+     */
+    private void expireVietQrPaymentSession(Order order) {
+        OrderDelivery delivery = order.getGiaoHang();
+        delivery.setTrangThaiThanhToan(PAYMENT_EXPIRED);
+        delivery.setThoiGianHetHanThanhToan(null);
+        Order savedOrder = orderRepository.saveAndFlush(order);
+        systemActivityService.record(
+                "DELIVERY_PAYMENT_SESSION_EXPIRED",
+                "Phiên thanh toán QR của đơn giao hàng #DH" + order.getMaDonHang()
+                        + " đã hết hạn; đơn vẫn được giữ để khách tạo mã mới",
+                order.getMaDonHang());
+        realtimeNotificationService.notifyDeliveryOrderChanged(
+                "DELIVERY_PAYMENT_SESSION_EXPIRED",
+                "Mã thanh toán đã hết hạn; đơn vẫn được giữ để tạo mã mới",
+                savedOrder);
+        realtimeNotificationService.notifyDashboardRefresh(savedOrder);
+    }
+
+    /** Chỉ hủy thật sự khi đơn đã vượt quá tổng thời gian giữ chờ thanh toán. */
     private void expireUnpaidVietQrOrder(Order order) {
         OrderDelivery delivery = order.getGiaoHang();
+        BigDecimal originalSubtotal = money(order.getTamTinh());
+        BigDecimal originalDiscount = money(order.getTienGiam());
+        BigDecimal originalPointDiscount = money(order.getTienGiamTuDiem());
+        BigDecimal originalTotal = money(order.getTongTien());
+
         order.getChiTietDonHang().forEach(item -> item.setTrangThaiMon("DA_HUY"));
         order.setTrangThai(DELIVERY_CANCELLED);
         delivery.setTrangThaiGiaoHang(DELIVERY_CANCELLED);
         delivery.setTrangThaiThanhToan(PAYMENT_EXPIRED);
-        delivery.setLyDoTuChoi("Đơn VietQR tự hủy vì quá thời hạn thanh toán");
+        delivery.setLyDoTuChoi("Đơn tự hủy vì quá tổng thời gian giữ chờ thanh toán");
         delivery.setThoiGianHuy(LocalDateTime.now());
         delivery.setThoiGianHetHanThanhToan(null);
         promotionService.releaseForCancelledOrder(order);
-        orderPricingService.recalculate(order);
-        orderRepository.saveAndFlush(order);
+
+        // releaseForCancelledOrder cần trả lượt khuyến mãi nên có tính giá lại. Khôi phục snapshot
+        // tài chính của đơn sau đó để lịch sử vẫn hiển thị đúng giá trị khách đã đặt.
+        order.setTamTinh(originalSubtotal);
+        order.setTienGiam(originalDiscount);
+        order.setTienGiamTuDiem(originalPointDiscount);
+        order.setTongTien(originalTotal);
+        Order savedOrder = orderRepository.saveAndFlush(order);
         systemActivityService.record(
-                "DELIVERY_PAYMENT_EXPIRED",
-                "Đơn giao hàng #DH" + order.getMaDonHang() + " đã tự hủy vì VietQR hết hạn",
+                "DELIVERY_ORDER_PAYMENT_HOLD_EXPIRED",
+                "Đơn giao hàng #DH" + order.getMaDonHang()
+                        + " đã tự hủy sau khi vượt quá tổng thời gian giữ chờ thanh toán",
                 order.getMaDonHang());
         realtimeNotificationService.notifyDeliveryOrderChanged(
-                "DELIVERY_PAYMENT_EXPIRED",
-                "Đơn đã tự hủy do quá thời hạn thanh toán VietQR",
-                order);
-        realtimeNotificationService.notifyDashboardRefresh(order);
+                "DELIVERY_ORDER_PAYMENT_HOLD_EXPIRED",
+                "Đơn đã hết thời gian giữ chờ thanh toán",
+                savedOrder);
+        realtimeNotificationService.notifyDashboardRefresh(savedOrder);
     }
 
     private Order cancelPendingOrder(Order order,
@@ -1329,6 +1419,21 @@ public class DeliveryOrderService {
         BigDecimal netPaid = money(delivery.getSoTienDaThanhToan())
                 .subtract(money(delivery.getSoTienDaHoan()));
         return netPaid.compareTo(money(order.getTongTien())) >= 0;
+    }
+
+    private LocalDateTime paymentHoldDeadline(Order order) {
+        if (order == null || order.getThoiGianDat() == null) {
+            return null;
+        }
+        int sessionMinutes = positiveOrDefault(deliveryProperties.getPaymentTimeoutMinutes(), 15);
+        int configuredMaxHold = positiveOrDefault(deliveryProperties.getPaymentMaxHoldMinutes(), 45);
+        int maxHoldMinutes = Math.max(sessionMinutes, configuredMaxHold);
+        return order.getThoiGianDat().plusMinutes(maxHoldMinutes);
+    }
+
+    private boolean isPaymentHoldDeadlineExpired(Order order) {
+        LocalDateTime deadline = paymentHoldDeadline(order);
+        return deadline != null && !deadline.isAfter(LocalDateTime.now());
     }
 
     private boolean isPaymentDeadlineExpired(OrderDelivery delivery) {
@@ -1940,10 +2045,16 @@ public class DeliveryOrderService {
                 delivery.getThoiGianGiaoThanhCong(),
                 delivery.getLyDoTuChoi(),
                 delivery.getLyDoGiaoThatBai(),
-                groupTrackingItems(order.getChiTietDonHang()));
+                groupTrackingItems(
+                        order.getChiTietDonHang(),
+                        DELIVERY_CANCELLED.equals(normalize(delivery.getTrangThaiGiaoHang()))
+                                && PAYMENT_EXPIRED.equals(normalize(delivery.getTrangThaiThanhToan()))
+                                && StringUtils.hasText(delivery.getLyDoTuChoi())
+                                && delivery.getLyDoTuChoi().contains("tổng thời gian giữ")
+                ));
     }
 
-    private List<DeliveryTrackingItemResponse> groupTrackingItems(List<OrderItem> items) {
+    private List<DeliveryTrackingItemResponse> groupTrackingItems(List<OrderItem> items, boolean preserveCancelledAmount) {
         Map<ItemGroupKey, ItemAccumulator> grouped = new LinkedHashMap<>();
         for (OrderItem item : items) {
             ItemGroupKey key = new ItemGroupKey(
@@ -1955,7 +2066,9 @@ public class DeliveryOrderService {
                     ignored -> new ItemAccumulator(item));
             accumulator.add(item);
         }
-        return grouped.values().stream().map(ItemAccumulator::toResponse).toList();
+        return grouped.values().stream()
+                .map(item -> item.toResponse(preserveCancelledAmount))
+                .toList();
     }
 
     private String formatOrderCode(Integer orderId) {
@@ -2062,8 +2175,9 @@ public class DeliveryOrderService {
             }
         }
 
-        private DeliveryTrackingItemResponse toResponse() {
+        private DeliveryTrackingItemResponse toResponse(boolean preserveCancelledAmount) {
             BigDecimal unitPrice = sample.getDonGia() == null ? BigDecimal.ZERO : sample.getDonGia();
+            int payableQuantity = preserveCancelledAmount ? quantity : Math.max(quantity - cancelled, 0);
             return new DeliveryTrackingItemResponse(
                     sample.getMonAn().getMaMonAn(),
                     sample.getMonAn().getTenMonAn(),
@@ -2076,7 +2190,7 @@ public class DeliveryOrderService {
                     completed,
                     cancelled,
                     unitPrice,
-                    unitPrice.multiply(BigDecimal.valueOf(Math.max(quantity - cancelled, 0))));
+                    unitPrice.multiply(BigDecimal.valueOf(payableQuantity)));
         }
     }
 }

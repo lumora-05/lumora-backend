@@ -24,7 +24,10 @@ public class DeliveryProperties {
     private String mockWaybillPrefix = "GRAB-DEMO";
     private Integer maxUnitsPerItem = 50;
     private Integer maxUnitsPerOrder = 100;
+    /** Thời lượng của một phiên/mã QR thanh toán. Hết thời gian này chỉ hết hạn phiên thanh toán, không hủy ngay đơn. */
     private Integer paymentTimeoutMinutes = 15;
+    /** Tổng thời gian tối đa giữ đơn online chờ thanh toán trước khi hệ thống thực sự hủy đơn. */
+    private Integer paymentMaxHoldMinutes = 45;
     /** Hẹn giờ phải cách hiện tại tối thiểu bao nhiêu phút. */
     private Integer scheduledMinAdvanceMinutes = 30;
     /** Chỉ cho phép hẹn giờ trong số ngày này để tránh giữ đơn quá xa. */

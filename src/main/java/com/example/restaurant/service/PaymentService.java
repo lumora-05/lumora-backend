@@ -549,6 +549,7 @@ public class PaymentService {
             payment.setTrangThai("PAID");
             payment.setMaThamChieu(reference);
             payment.setThoiGianThanhToan(LocalDateTime.now());
+            cancelOtherPendingDeliveryPayments(payment);
             payOsPaymentRepository.saveAndFlush(payment);
             return new PayOsWebhookResponse(
                     true,
@@ -562,6 +563,36 @@ public class PaymentService {
         payment.setThoiGianThanhToan(invoice.getThoiGianThanhToan());
         payOsPaymentRepository.saveAndFlush(payment);
         return new PayOsWebhookResponse(true, "Đã tự động cập nhật thanh toán cho đơn #DH" + payment.getDonHang().getMaDonHang());
+    }
+
+    /**
+     * Một đơn có thể có nhiều payment attempt sau khi khách tạo lại QR. Khi một attempt
+     * đã thanh toán thành công, đóng các attempt PENDING còn lại để không tiếp tục hiển thị
+     * hoặc xử lý chúng như một phiên thanh toán hợp lệ. Lỗi hủy phía gateway không được
+     * phép làm rollback giao dịch đã thanh toán thành công.
+     */
+    private void cancelOtherPendingDeliveryPayments(PayOsPayment paidPayment) {
+        if (paidPayment == null || paidPayment.getDonHang() == null || paidPayment.getDonHang().getMaDonHang() == null) {
+            return;
+        }
+        Integer orderId = paidPayment.getDonHang().getMaDonHang();
+        List<PayOsPayment> pendingPayments = payOsPaymentRepository
+                .findByDonHang_MaDonHangAndTrangThaiOrderByThoiGianTaoDesc(orderId, "PENDING");
+        for (PayOsPayment pending : pendingPayments) {
+            if (Objects.equals(pending.getMaGiaoDichPayOs(), paidPayment.getMaGiaoDichPayOs())) {
+                continue;
+            }
+            try {
+                payOsGatewayService.cancelPayment(
+                        pending.getPayOsOrderCode(),
+                        "Đơn hàng đã được thanh toán bằng yêu cầu khác"
+                );
+            } catch (RuntimeException ignored) {
+                // Không làm thất bại webhook đã xác minh chỉ vì payment attempt cũ không hủy được ở gateway.
+            }
+            pending.setTrangThai("CANCELLED");
+            payOsPaymentRepository.save(pending);
+        }
     }
 
     /** Tạo VietQR động kiểu cũ; giữ lại cho các luồng khác chưa chuyển sang payOS. */
