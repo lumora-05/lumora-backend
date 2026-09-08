@@ -14,10 +14,12 @@ import com.example.restaurant.entity.Invoice;
 import com.example.restaurant.entity.Order;
 import com.example.restaurant.entity.OrderItem;
 import com.example.restaurant.entity.PayOsPayment;
+import com.example.restaurant.entity.ReservationPayOsPayment;
 import com.example.restaurant.repository.EmployeeRepository;
 import com.example.restaurant.repository.InvoiceRepository;
 import com.example.restaurant.repository.OrderRepository;
 import com.example.restaurant.repository.PayOsPaymentRepository;
+import com.example.restaurant.repository.ReservationPayOsPaymentRepository;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -91,6 +93,7 @@ public class PaymentService {
     private final LoyaltyService loyaltyService;
     private final PayOsGatewayService payOsGatewayService;
     private final PayOsPaymentRepository payOsPaymentRepository;
+    private final ReservationPayOsPaymentRepository reservationPayOsPaymentRepository;
     private final DeliveryOrderService deliveryOrderService;
 
     public PaymentService(InvoiceRepository invoiceRepository,
@@ -105,6 +108,7 @@ public class PaymentService {
                           LoyaltyService loyaltyService,
                           PayOsGatewayService payOsGatewayService,
                           PayOsPaymentRepository payOsPaymentRepository,
+                          ReservationPayOsPaymentRepository reservationPayOsPaymentRepository,
                           @Lazy DeliveryOrderService deliveryOrderService) {
         this.invoiceRepository = invoiceRepository;
         this.orderRepository = orderRepository;
@@ -118,6 +122,7 @@ public class PaymentService {
         this.loyaltyService = loyaltyService;
         this.payOsGatewayService = payOsGatewayService;
         this.payOsPaymentRepository = payOsPaymentRepository;
+        this.reservationPayOsPaymentRepository = reservationPayOsPaymentRepository;
         this.deliveryOrderService = deliveryOrderService;
     }
 
@@ -496,8 +501,8 @@ public class PaymentService {
     }
 
     /**
-     * Nhận webhook payOS, xác minh chữ ký rồi tự động tạo hóa đơn và chuyển
-     * trạng thái đơn sang DA_THANH_TOAN. Xử lý idempotent khi payOS gửi lại.
+     * Nhận webhook payOS, xác minh chữ ký rồi định tuyến sang thanh toán đơn hàng
+     * hoặc tiền cọc đặt bàn. Xử lý idempotent khi payOS gửi lại.
      */
     @Transactional
     public PayOsWebhookResponse handlePayOsWebhook(JsonNode webhookBody) {
@@ -512,6 +517,12 @@ public class PaymentService {
         PayOsPayment payment = payOsPaymentRepository.findByPayOsOrderCodeForUpdate(webhook.orderCode())
                 .orElse(null);
         if (payment == null) {
+            ReservationPayOsPayment reservationPayment = reservationPayOsPaymentRepository
+                    .findByPayOsOrderCodeForUpdate(webhook.orderCode())
+                    .orElse(null);
+            if (reservationPayment != null) {
+                return handleReservationPayOsWebhook(webhook, reservationPayment);
+            }
             // payOS gửi dữ liệu mẫu khi đăng ký webhook; vẫn trả 2xx để xác nhận endpoint hoạt động.
             return new PayOsWebhookResponse(true, "Webhook hợp lệ nhưng không thuộc giao dịch Lumora đang theo dõi");
         }
@@ -563,6 +574,79 @@ public class PaymentService {
         payment.setThoiGianThanhToan(invoice.getThoiGianThanhToan());
         payOsPaymentRepository.saveAndFlush(payment);
         return new PayOsWebhookResponse(true, "Đã tự động cập nhật thanh toán cho đơn #DH" + payment.getDonHang().getMaDonHang());
+    }
+
+    private PayOsWebhookResponse handleReservationPayOsWebhook(
+            PayOsGatewayService.VerifiedWebhook webhook,
+            ReservationPayOsPayment payment) {
+        if ("PAID".equals(normalizeText(payment.getTrangThai()))) {
+            return new PayOsWebhookResponse(true, "Giao dịch cọc đặt bàn đã được xử lý trước đó");
+        }
+
+        long expectedAmount = toPayOsAmount(payment.getSoTien());
+        if (webhook.amount() != expectedAmount) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Số tiền webhook payOS không khớp tiền cọc đặt bàn");
+        }
+        String expectedLinkId = trimToNull(payment.getPaymentLinkId());
+        String webhookLinkId = trimToNull(webhook.paymentLinkId());
+        if (expectedLinkId != null && webhookLinkId != null && !expectedLinkId.equals(webhookLinkId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Payment link payOS không khớp giao dịch cọc");
+        }
+
+        String reference = normalizeTransactionCode(webhook.reference());
+        if (reference == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Webhook payOS thiếu mã tham chiếu giao dịch");
+        }
+        if (reservationPayOsPaymentRepository.existsByMaThamChieuIgnoreCase(reference)
+                && !reference.equalsIgnoreCase(trimToNull(payment.getMaThamChieu()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã tham chiếu payOS đã được dùng cho tiền cọc khác");
+        }
+        if (payOsPaymentRepository.existsByMaThamChieuIgnoreCase(reference)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã tham chiếu payOS đã được dùng cho thanh toán đơn hàng");
+        }
+        if (invoiceRepository.existsByMaGiaoDichIgnoreCase(reference)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã giao dịch đã được sử dụng cho hóa đơn");
+        }
+
+        Integer reservationId = payment.getDatBan().getMaDatBan();
+        reservationService.confirmDepositByPayOs(
+                reservationId,
+                reference,
+                normalizedMoney(payment.getSoTien())
+        );
+        payment.setTrangThai("PAID");
+        payment.setMaThamChieu(reference);
+        payment.setThoiGianThanhToan(LocalDateTime.now());
+        cancelOtherPendingReservationPayments(payment);
+        reservationPayOsPaymentRepository.saveAndFlush(payment);
+        return new PayOsWebhookResponse(
+                true,
+                "Đã tự động ghi nhận tiền cọc payOS cho lịch đặt bàn #DB" + reservationId
+        );
+    }
+
+    private void cancelOtherPendingReservationPayments(ReservationPayOsPayment paidPayment) {
+        if (paidPayment == null || paidPayment.getDatBan() == null || paidPayment.getDatBan().getMaDatBan() == null) {
+            return;
+        }
+        Integer reservationId = paidPayment.getDatBan().getMaDatBan();
+        List<ReservationPayOsPayment> pendingPayments = reservationPayOsPaymentRepository
+                .findByDatBan_MaDatBanAndTrangThaiOrderByThoiGianTaoDesc(reservationId, "PENDING");
+        for (ReservationPayOsPayment pending : pendingPayments) {
+            if (Objects.equals(pending.getMaGiaoDichPayOsDatBan(), paidPayment.getMaGiaoDichPayOsDatBan())) {
+                continue;
+            }
+            try {
+                payOsGatewayService.cancelPayment(
+                        pending.getPayOsOrderCode(),
+                        "Tiền cọc đặt bàn đã được thanh toán bằng yêu cầu khác"
+                );
+            } catch (RuntimeException ignored) {
+                // Không làm thất bại webhook đã xác minh chỉ vì payment attempt cũ không hủy được ở gateway.
+            }
+            pending.setTrangThai("CANCELLED");
+            reservationPayOsPaymentRepository.save(pending);
+        }
     }
 
     /**

@@ -44,45 +44,27 @@ Phản hồi `ReservationResponse` có thêm:
 - `thoiGianHoanCoc`
 - `lyDoXuLyCoc`
 
-### 2. Lấy VietQR cọc
+### 2. Lấy QR cọc payOS
 
 ```http
 GET /api/customer/reservations/{maTraCuu}/deposit/vietqr?phone=0901234567
 ```
 
-Endpoint chỉ tạo QR, **không tự đánh dấu đã thanh toán**.
+Endpoint giữ nguyên URL/response để tương thích frontend, nhưng QR hiện được tạo bằng **payOS**. Mở QR chưa được xem là thanh toán; backend chỉ chuyển cọc sang `DA_THANH_TOAN` khi nhận webhook payOS hợp lệ.
 
 ## Luồng Thu ngân/Admin
 
-### Xác nhận cọc và đặt bàn trong một thao tác (khuyến nghị)
+Sau khi khách chuyển khoản thành công, payOS webhook tự xác nhận tiền cọc. Thu ngân/Admin **không kiểm tra giao dịch và không đánh dấu cọc thủ công** nữa.
 
-Sau khi Thu ngân/Admin đã kiểm tra tiền thực tế vào tài khoản và chọn bàn dự kiến, gọi:
+Nhân viên chỉ chọn bàn dự kiến và xác nhận lịch sau khi `trangThaiCoc = DA_THANH_TOAN`:
 
 ```http
-POST /api/reservations/{id}/deposit/confirm-and-reservation
+POST /api/reservations/{id}/confirm
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-```json
-{
-  "maBanDuKien": 6,
-  "ghiChu": "Bàn gần cửa sổ"
-}
-```
-
-Backend xử lý trong **một transaction**: xác nhận cọc, lưu người/thời gian xác nhận cọc, kiểm tra và giữ bàn dự kiến, rồi chuyển lịch sang `DA_XAC_NHAN`. Nếu bàn không còn khả dụng hoặc bất kỳ bước nào thất bại thì toàn bộ thao tác được rollback, không có trạng thái xác nhận nửa chừng.
-
-Nếu cọc đã được xác nhận trước đó bằng API cũ nhưng lịch vẫn `CHO_XAC_NHAN`, endpoint này vẫn có thể dùng để hoàn tất bước chọn bàn và xác nhận lịch mà không ghi đè lịch sử xác nhận cọc.
-
-### API xác nhận cọc riêng (giữ để tương thích)
-
-```http
-POST /api/reservations/{id}/deposit/confirm
-Authorization: Bearer <token>
-```
-
-Endpoint cũ vẫn được giữ để không ảnh hưởng client hiện tại. Nó chỉ xác nhận cọc; sau đó client cũ tiếp tục gọi `POST /api/reservations/{id}/confirm`. Frontend mới nên ưu tiên endpoint gộp ở trên để tránh bắt Thu ngân thao tác hai lần.
+Endpoint tương thích cũ `POST /api/reservations/{id}/deposit/confirm-and-reservation` vẫn được giữ, nhưng cũng yêu cầu cọc đã được webhook payOS xác nhận trước. API `POST /api/reservations/{id}/deposit/confirm` không còn cho phép tự đánh dấu một cọc đang chờ thanh toán; nếu cọc đã `DA_THANH_TOAN` thì trả kết quả hiện tại theo kiểu idempotent.
 
 ### Ghi nhận đã hoàn cọc
 
@@ -115,4 +97,10 @@ Nếu production không dùng `spring.jpa.hibernate.ddl-auto=update`, chạy:
 database/reservation_deposit_upgrade.sql
 ```
 
-Script cũng cập nhật constraint đặt bàn để hỗ trợ trạng thái `HET_HAN`.
+Và để tạo bảng payment attempt payOS riêng cho tiền cọc đặt bàn, chạy thêm:
+
+```text
+database/payos_reservation_deposit_upgrade.sql
+```
+
+`reservation_deposit_upgrade.sql` cũng cập nhật constraint đặt bàn để hỗ trợ trạng thái `HET_HAN`.

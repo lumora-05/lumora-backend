@@ -68,3 +68,15 @@ Luồng VietQR của đơn online cũng dùng payOS tự động:
 7. Nhân viên xác nhận đơn được lưu làm người phụ trách để tạo hóa đơn khi đơn hoàn tất.
 
 Để hỗ trợ QR do khách tự mở, cột `giao_dich_payos.ma_nhan_vien` phải cho phép `NULL`. Nếu database hiện tại đã có bảng này, chạy `database/payos_delivery_auto_upgrade.sql` một lần (hoặc để Hibernate schema update áp dụng thay đổi nullable nếu môi trường của bạn hỗ trợ).
+## Cọc đặt bàn
+
+Tiền cọc đặt bàn cũng dùng chung webhook payOS hiện tại:
+
+1. Khách tạo lịch đặt bàn, cọc ở `CHO_THANH_TOAN`.
+2. `GET /api/customer/reservations/{maTraCuu}/deposit/vietqr?phone=...` tạo payment request payOS và trả ảnh QR qua field `qrUrl` cũ.
+3. Khách chuyển khoản.
+4. payOS gọi `POST /api/payments/payos/webhook`.
+5. Backend tự cập nhật `trangThaiCoc = DA_THANH_TOAN`, lưu mã tham chiếu vào `maGiaoDichCoc` và gửi realtime notification.
+6. Lịch vẫn giữ `CHO_XAC_NHAN`; Thu ngân/Admin chỉ chọn bàn và xác nhận lịch, không xác nhận tiền thủ công.
+
+Tiền cọc dùng bảng `giao_dich_payos_dat_ban` riêng nhưng tái sử dụng cùng `PayOsGatewayService` và cùng webhook payOS. Bảng `giao_dich_payos` của thanh toán đơn hàng không bị thay đổi. Nếu production không để Hibernate cập nhật schema, chạy `database/payos_reservation_deposit_upgrade.sql` một lần.

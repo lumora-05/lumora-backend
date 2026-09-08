@@ -7,11 +7,14 @@ import com.example.restaurant.dto.*;
 import com.example.restaurant.entity.DiningTable;
 import com.example.restaurant.entity.Employee;
 import com.example.restaurant.entity.Order;
+import com.example.restaurant.entity.ReservationPayOsPayment;
 import com.example.restaurant.entity.ReservationPreorderItem;
 import com.example.restaurant.entity.TableReservation;
 import com.example.restaurant.repository.DiningTableRepository;
 import com.example.restaurant.repository.EmployeeRepository;
 import com.example.restaurant.repository.OrderRepository;
+import com.example.restaurant.repository.PayOsPaymentRepository;
+import com.example.restaurant.repository.ReservationPayOsPaymentRepository;
 import com.example.restaurant.repository.TableReservationRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -24,19 +27,21 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.util.UriComponentsBuilder;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.client.j2se.MatrixToImageWriter;
+import com.google.zxing.qrcode.QRCodeWriter;
 
+import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 @Service
 public class ReservationService {
@@ -57,7 +62,6 @@ public class ReservationService {
     private static final String DEPOSIT_FORFEITED = "MAT_COC";
     private static final String DEPOSIT_APPLIED = "DA_KHAU_TRU";
     private static final String DEPOSIT_CANCELLED = "DA_HUY";
-    private static final Pattern SAFE_VIETQR_PATH_PART = Pattern.compile("[A-Za-z0-9_]+");
 
     private static final Set<String> TERMINAL_STATUSES = Set.of(COMPLETED, CANCELLED, REJECTED, NO_SHOW, EXPIRED);
     private static final Set<String> WAITER_GLOBAL_VISIBILITY_STATUSES = Set.of(CONFIRMED, ARRIVED);
@@ -80,6 +84,9 @@ public class ReservationService {
     private final ReservationPolicyProperties reservationPolicyProperties;
     private final RestaurantInfoProperties restaurantInfoProperties;
     private final VietQrProperties vietQrProperties;
+    private final PayOsGatewayService payOsGatewayService;
+    private final PayOsPaymentRepository payOsPaymentRepository;
+    private final ReservationPayOsPaymentRepository reservationPayOsPaymentRepository;
 
     public ReservationService(TableReservationRepository reservationRepository,
                               DiningTableRepository diningTableRepository,
@@ -89,7 +96,10 @@ public class ReservationService {
                               SystemActivityService systemActivityService,
                               ReservationPolicyProperties reservationPolicyProperties,
                               RestaurantInfoProperties restaurantInfoProperties,
-                              VietQrProperties vietQrProperties) {
+                              VietQrProperties vietQrProperties,
+                              PayOsGatewayService payOsGatewayService,
+                              PayOsPaymentRepository payOsPaymentRepository,
+                              ReservationPayOsPaymentRepository reservationPayOsPaymentRepository) {
         this.reservationRepository = reservationRepository;
         this.diningTableRepository = diningTableRepository;
         this.employeeRepository = employeeRepository;
@@ -99,6 +109,9 @@ public class ReservationService {
         this.reservationPolicyProperties = reservationPolicyProperties;
         this.restaurantInfoProperties = restaurantInfoProperties;
         this.vietQrProperties = vietQrProperties;
+        this.payOsGatewayService = payOsGatewayService;
+        this.payOsPaymentRepository = payOsPaymentRepository;
+        this.reservationPayOsPaymentRepository = reservationPayOsPaymentRepository;
     }
 
     @Transactional
@@ -126,10 +139,20 @@ public class ReservationService {
         return toResponse(saved);
     }
 
-    /** Tạo VietQR cọc cho chính khách sở hữu lịch. Chỉ đọc dữ liệu, không tự xác nhận đã nhận tiền. */
-    @Transactional(readOnly = true)
+    /**
+     * Tạo payment request payOS cho tiền cọc đặt bàn. Mở QR chưa được xem là
+     * đã thanh toán; trạng thái cọc chỉ đổi sau khi webhook payOS hợp lệ được nhận.
+     */
+    @Transactional
     public ReservationDepositVietQrResponse createDepositVietQr(String code, String phone) {
-        TableReservation reservation = findByCode(code);
+        if (!payOsGatewayService.isConfigured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Chưa cấu hình payOS cho thanh toán cọc tự động"
+            );
+        }
+
+        TableReservation reservation = findByCodeForUpdate(code);
         verifyCustomerPhone(reservation, phone);
         if (!PENDING.equals(normalizeStatus(reservation.getTrangThai()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn không còn ở bước thanh toán cọc");
@@ -137,61 +160,170 @@ public class ReservationService {
         if (!DEPOSIT_PENDING.equals(normalizeStatus(reservation.getTrangThaiCoc()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Tiền cọc của lịch đặt bàn đã được xử lý");
         }
-        if (reservation.getThoiHanThanhToanCoc() != null
-                && !LocalDateTime.now().isBefore(reservation.getThoiHanThanhToanCoc())) {
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime depositDeadline = reservation.getThoiHanThanhToanCoc();
+        if (depositDeadline != null && !now.isBefore(depositDeadline)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Đã quá thời hạn thanh toán tiền cọc");
         }
-        return buildDepositVietQr(reservation);
+
+        BigDecimal payable = normalizedMoney(reservation.getTienCoc());
+        long amount = toPayOsAmount(payable);
+        if (amount <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Số tiền cọc không hợp lệ");
+        }
+
+        List<ReservationPayOsPayment> pendingPayments = reservationPayOsPaymentRepository
+                .findByDatBan_MaDatBanAndTrangThaiOrderByThoiGianTaoDesc(
+                        reservation.getMaDatBan(), "PENDING"
+                );
+        for (ReservationPayOsPayment pending : pendingPayments) {
+            if (pending.getHetHanLuc() != null && !pending.getHetHanLuc().isAfter(now)) {
+                pending.setTrangThai("EXPIRED");
+                reservationPayOsPaymentRepository.save(pending);
+                continue;
+            }
+            if (normalizedMoney(pending.getSoTien()).compareTo(payable) == 0
+                    && trimToNull(pending.getQrCode()) != null) {
+                return toReservationPayOsVietQrResponse(reservation, pending);
+            }
+
+            payOsGatewayService.cancelPayment(pending.getPayOsOrderCode(), "Tạo yêu cầu cọc đặt bàn mới");
+            pending.setTrangThai("CANCELLED");
+            reservationPayOsPaymentRepository.save(pending);
+        }
+
+        LocalDateTime expiresAt = now.plusMinutes(payOsGatewayService.expireMinutes());
+        if (depositDeadline != null && depositDeadline.isBefore(expiresAt)) {
+            expiresAt = depositDeadline;
+        }
+        if (!expiresAt.isAfter(now)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Thời hạn thanh toán tiền cọc đã hết");
+        }
+
+        ReservationPayOsPayment payment = new ReservationPayOsPayment();
+        payment.setDatBan(reservation);
+        payment.setPayOsOrderCode(nextReservationPayOsOrderCode());
+        payment.setSoTien(payable);
+        payment.setSoDienThoaiKhach(trimToNull(reservation.getSoDienThoai()));
+        payment.setNoiDungChuyenKhoan(buildReservationPayOsDescription(reservation.getMaDatBan()));
+        payment.setTrangThai("PENDING");
+        payment.setThoiGianTao(now);
+        payment.setHetHanLuc(expiresAt);
+        reservationPayOsPaymentRepository.saveAndFlush(payment);
+
+        PayOsGatewayService.CreatePaymentResult created = payOsGatewayService.createPayment(
+                payment.getPayOsOrderCode(),
+                amount,
+                payment.getNoiDungChuyenKhoan(),
+                expiresAt
+        );
+        if (created.orderCode() != payment.getPayOsOrderCode() || created.amount() != amount) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "payOS trả về sai mã giao dịch hoặc số tiền cọc");
+        }
+
+        payment.setPaymentLinkId(trimToNull(created.paymentLinkId()));
+        payment.setBinNganHang(trimToNull(created.bin()));
+        payment.setSoTaiKhoan(trimToNull(created.accountNumber()));
+        payment.setTenTaiKhoan(trimToNull(created.accountName()));
+        payment.setQrCode(trimToNull(created.qrCode()));
+        payment.setCheckoutUrl(trimToNull(created.checkoutUrl()));
+        if (trimToNull(created.description()) != null) {
+            payment.setNoiDungChuyenKhoan(created.description().trim());
+        }
+        reservationPayOsPaymentRepository.saveAndFlush(payment);
+        return toReservationPayOsVietQrResponse(reservation, payment);
     }
 
-    /** Thu ngân/Admin chỉ xác nhận sau khi thực sự kiểm tra tiền đã vào tài khoản. */
+    /**
+     * API cũ được giữ để tương thích client. Tiền cọc mới do webhook payOS xác nhận tự động,
+     * vì vậy nhân viên không thể tự đánh dấu một giao dịch chưa thực sự thanh toán.
+     */
     @Transactional
     public ReservationResponse confirmDeposit(Integer id,
                                                String username,
                                                boolean admin) {
         TableReservation reservation = findByIdForUpdate(id);
         ensureActorCanAccessReservation(reservation, username, admin);
-        String reservationStatus = normalizeStatus(reservation.getTrangThai());
+        if (DEPOSIT_PAID.equals(normalizeStatus(reservation.getTrangThaiCoc()))) {
+            return toResponse(reservation);
+        }
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Tiền cọc được xác nhận tự động qua webhook payOS; vui lòng chờ giao dịch thành công"
+        );
+    }
+
+    /**
+     * Webhook payOS gọi phương thức này sau khi đã xác minh chữ ký, orderCode, paymentLinkId
+     * và số tiền. Chỉ cập nhật cọc; việc chọn bàn/xác nhận lịch vẫn do nhân viên thực hiện.
+     */
+    @Transactional
+    public ReservationResponse confirmDepositByPayOs(Integer reservationId,
+                                                      String transactionReference,
+                                                      BigDecimal paidAmount) {
+        TableReservation reservation = findByIdForUpdate(reservationId);
+        String reference = normalizeDepositTransactionCode(transactionReference);
+        BigDecimal expected = normalizedMoney(reservation.getTienCoc());
+        BigDecimal actual = normalizedMoney(paidAmount);
+        if (expected.compareTo(actual) != 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Số tiền cọc payOS không khớp lịch đặt bàn");
+        }
+
         String depositStatus = normalizeStatus(reservation.getTrangThaiCoc());
+        if (DEPOSIT_PAID.equals(depositStatus)) {
+            String existingReference = trimToNull(reservation.getMaGiaoDichCoc());
+            if (existingReference != null && existingReference.equalsIgnoreCase(reference)) {
+                return toResponse(reservation);
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tiền cọc đã được thanh toán bằng giao dịch khác");
+        }
+
+        String reservationStatus = normalizeStatus(reservation.getTrangThai());
         boolean expiredByDepositTimeout = EXPIRED.equals(reservationStatus)
                 && DEPOSIT_CANCELLED.equals(depositStatus)
                 && "Quá thời hạn thanh toán tiền cọc".equals(reservation.getLyDoHuyTuChoi());
         if (!PENDING.equals(reservationStatus) && !expiredByDepositTimeout) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn không còn ở bước xác nhận tiền cọc");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn không còn nhận thanh toán tiền cọc");
         }
         if (PENDING.equals(reservationStatus) && !DEPOSIT_PENDING.equals(depositStatus)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Tiền cọc của lịch đặt bàn đã được xử lý");
         }
+        if (reservationRepository.existsByMaGiaoDichCocIgnoreCase(reference)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã giao dịch đã được sử dụng cho tiền cọc đặt bàn");
+        }
         if (LocalDateTime.now().isAfter(reservation.getNgayGioDen().plusMinutes(noShowGraceMinutes()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn đã quá thời gian có thể tiếp nhận");
         }
-        Employee employee = requireActiveEmployee(username);
+
         if (expiredByDepositTimeout) {
             reservation.setTrangThai(PENDING);
             reservation.setLyDoHuyTuChoi(null);
         }
+        LocalDateTime paidAt = LocalDateTime.now();
         reservation.setTrangThaiCoc(DEPOSIT_PAID);
-        reservation.setThoiGianThanhToanCoc(LocalDateTime.now());
-        reservation.setNguoiXacNhanCoc(employee);
-        reservation.setLyDoXuLyCoc(null);
+        reservation.setThoiGianThanhToanCoc(paidAt);
+        reservation.setMaGiaoDichCoc(reference);
+        reservation.setNguoiXacNhanCoc(null);
+        reservation.setLyDoXuLyCoc("payOS xác nhận thanh toán tự động");
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
+
         systemActivityService.record(
-                "RESERVATION_DEPOSIT_CONFIRMED",
-                "Đã xác nhận tiền cọc cho lịch " + saved.getMaTraCuu(),
+                "RESERVATION_DEPOSIT_PAYOS_PAID",
+                "payOS đã xác nhận tiền cọc cho lịch " + saved.getMaTraCuu(),
                 saved.getMaDatBan()
         );
         realtimeNotificationService.notifyReservationChanged(
                 "RESERVATION_DEPOSIT_CONFIRMED",
-                "Tiền cọc đặt bàn đã được xác nhận",
+                "Tiền cọc đặt bàn đã được payOS xác nhận tự động",
                 saved
         );
         return toResponse(saved);
     }
 
     /**
-     * Thu ngân/Admin xác nhận tiền cọc và lịch đặt bàn trong cùng một transaction.
-     * Frontend dùng API này sau khi nhân viên đã kiểm tra tiền thực tế và chọn bàn dự kiến.
-     * Nếu bàn không còn khả dụng hoặc bất kỳ bước nào thất bại thì toàn bộ thay đổi được rollback.
+     * Endpoint gộp được giữ để tương thích frontend cũ. Cọc phải được payOS webhook
+     * xác nhận trước; thao tác này chỉ chọn bàn dự kiến và xác nhận lịch đặt bàn.
      */
     @Transactional
     public ReservationResponse confirmDepositAndReservation(Integer id,
@@ -200,20 +332,8 @@ public class ReservationService {
                                                              boolean admin) {
         TableReservation reservation = findByIdForUpdate(id);
         ensureActorCanAccessReservation(reservation, username, admin);
-
-        String reservationStatus = normalizeStatus(reservation.getTrangThai());
-        String depositStatus = normalizeStatus(reservation.getTrangThaiCoc());
-        boolean expiredByDepositTimeout = EXPIRED.equals(reservationStatus)
-                && DEPOSIT_CANCELLED.equals(depositStatus)
-                && "Quá thời hạn thanh toán tiền cọc".equals(reservation.getLyDoHuyTuChoi());
-
-        if (!PENDING.equals(reservationStatus) && !expiredByDepositTimeout) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn không còn ở bước xác nhận");
-        }
-        if (PENDING.equals(reservationStatus)
-                && !Set.of(DEPOSIT_PENDING, DEPOSIT_PAID).contains(depositStatus)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tiền cọc của lịch đặt bàn đã được xử lý");
-        }
+        requireStatus(reservation, PENDING, "Chỉ có thể xác nhận yêu cầu đang chờ");
+        requireDepositPaid(reservation);
 
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime confirmDeadline = reservation.getNgayGioDen().plusMinutes(noShowGraceMinutes());
@@ -229,18 +349,6 @@ public class ReservationService {
         validateTableForReservation(table, reservation);
         ensureNoOverlap(table, reservation);
 
-        // Chỉ ghi nhận cọc nếu trước đó chưa được xác nhận. Nếu cọc đã được xác nhận
-        // bằng API cũ thì vẫn cho phép hoàn tất đặt bàn mà không ghi đè lịch sử cọc.
-        if (!DEPOSIT_PAID.equals(depositStatus)) {
-            if (!DEPOSIT_PENDING.equals(depositStatus) && !expiredByDepositTimeout) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Tiền cọc của lịch đặt bàn không thể xác nhận");
-            }
-            reservation.setTrangThaiCoc(DEPOSIT_PAID);
-            reservation.setThoiGianThanhToanCoc(now);
-            reservation.setNguoiXacNhanCoc(employee);
-            reservation.setLyDoXuLyCoc(null);
-        }
-
         reservation.setBanDuKien(table);
         reservation.setTrangThai(CONFIRMED);
         reservation.setNguoiXacNhan(employee);
@@ -252,14 +360,14 @@ public class ReservationService {
 
         TableReservation saved = reservationRepository.saveAndFlush(reservation);
         systemActivityService.record(
-                "RESERVATION_DEPOSIT_AND_CONFIRMED",
-                "Đã xác nhận cọc và lịch " + saved.getMaTraCuu()
-                        + ", giữ dự kiến " + effectiveTableName(table),
+                "RESERVATION_CONFIRMED_AFTER_DEPOSIT",
+                "Đã xác nhận lịch " + saved.getMaTraCuu()
+                        + " sau khi payOS xác nhận cọc, giữ dự kiến " + effectiveTableName(table),
                 saved.getMaDatBan()
         );
         realtimeNotificationService.notifyReservationChanged(
-                "RESERVATION_DEPOSIT_AND_CONFIRMED",
-                "Tiền cọc và lịch đặt bàn đã được xác nhận",
+                "RESERVATION_CONFIRMED",
+                "Lịch đặt bàn đã được xác nhận",
                 saved
         );
         return toResponse(saved);
@@ -1601,7 +1709,7 @@ public class ReservationService {
         if (!DEPOSIT_PAID.equals(normalizeStatus(reservation.getTrangThaiCoc()))) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Khách phải thanh toán và được xác nhận tiền cọc trước khi nhà hàng xác nhận đặt bàn"
+                    "Khách phải thanh toán cọc và chờ payOS xác nhận trước khi nhà hàng xác nhận đặt bàn"
             );
         }
     }
@@ -1651,31 +1759,17 @@ public class ReservationService {
         }
     }
 
-    private ReservationDepositVietQrResponse buildDepositVietQr(TableReservation reservation) {
-        String bankId = requireVietQrConfig(vietQrProperties.getBankId(), "VIETQR_BANK_ID");
-        String accountNo = requireVietQrConfig(vietQrProperties.getAccountNo(), "VIETQR_ACCOUNT_NO");
-        String accountName = requireVietQrConfig(vietQrProperties.getAccountName(), "VIETQR_ACCOUNT_NAME");
-        String template = trimToNull(vietQrProperties.getTemplate());
-        if (template == null) {
-            template = "compact2";
+    private ReservationDepositVietQrResponse toReservationPayOsVietQrResponse(
+            TableReservation reservation,
+            ReservationPayOsPayment payment) {
+        String qrCode = trimToNull(payment.getQrCode());
+        if (qrCode == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "payOS không trả về dữ liệu QR cọc đặt bàn");
         }
-        validateSafeVietQrPathPart(bankId, "Mã ngân hàng VietQR");
-        validateSafeVietQrPathPart(accountNo, "Số tài khoản VietQR");
-        validateSafeVietQrPathPart(template, "Mẫu VietQR");
-
-        BigDecimal amount;
-        try {
-            amount = normalizedMoney(reservation.getTienCoc()).setScale(0, RoundingMode.UNNECESSARY);
-        } catch (ArithmeticException exception) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Số tiền cọc VietQR phải là số nguyên");
+        String bankId = trimToNull(payment.getBinNganHang());
+        if (bankId == null) {
+            bankId = "PAYOS";
         }
-        String addInfo = buildDepositTransferDescription(reservation.getMaTraCuu());
-        String baseUrl = "https://img.vietqr.io/image/" + bankId + "-" + accountNo + "-" + template + ".png";
-        String qrUrl = UriComponentsBuilder.fromUriString(baseUrl)
-                .queryParam("amount", amount.toPlainString())
-                .queryParam("addInfo", addInfo)
-                .queryParam("accountName", accountName)
-                .build().encode().toUriString();
         String bankName = trimToNull(vietQrProperties.getBankName());
         if (bankName == null) {
             bankName = bankId;
@@ -1683,35 +1777,61 @@ public class ReservationService {
         return new ReservationDepositVietQrResponse(
                 reservation.getMaDatBan(),
                 reservation.getMaTraCuu(),
-                amount,
+                normalizedMoney(payment.getSoTien()).setScale(0, RoundingMode.UNNECESSARY),
                 reservation.getTrangThaiCoc(),
                 reservation.getThoiHanThanhToanCoc(),
                 bankId,
                 bankName,
-                accountNo,
-                accountName,
-                addInfo,
-                template,
-                qrUrl
+                trimToNull(payment.getSoTaiKhoan()),
+                trimToNull(payment.getTenTaiKhoan()),
+                payment.getNoiDungChuyenKhoan(),
+                "payos",
+                payOsQrCodeDataUrl(qrCode)
         );
     }
 
-    private String buildDepositTransferDescription(String lookupCode) {
-        String prefix = trimToNull(vietQrProperties.getDescriptionPrefix());
-        if (prefix == null) {
-            prefix = "LUMORA";
+    private String payOsQrCodeDataUrl(String qrCode) {
+        try {
+            var matrix = new QRCodeWriter().encode(qrCode, BarcodeFormat.QR_CODE, 320, 320);
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            MatrixToImageWriter.writeToStream(matrix, "PNG", output);
+            return "data:image/png;base64," + Base64.getEncoder().encodeToString(output.toByteArray());
+        } catch (Exception exception) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Không thể tạo ảnh QR payOS cho tiền cọc",
+                    exception
+            );
         }
-        prefix = removeVietnameseAccents(prefix)
-                .toUpperCase(Locale.ROOT)
-                .replaceAll("[^A-Z0-9 ]", " ")
-                .replaceAll("\\s+", " ")
-                .trim();
-        if (prefix.isBlank()) {
-            prefix = "LUMORA";
+    }
+
+    private synchronized long nextReservationPayOsOrderCode() {
+        long candidate = Math.multiplyExact(System.currentTimeMillis(), 10L) + 7L;
+        while (payOsPaymentRepository.existsByPayOsOrderCode(candidate)
+                || reservationPayOsPaymentRepository.existsByPayOsOrderCode(candidate)) {
+            candidate += 10L;
         }
-        String safeCode = lookupCode == null ? "" : lookupCode.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
-        String description = prefix + " COC " + safeCode;
-        return description.length() <= 50 ? description : description.substring(0, 50).trim();
+        return candidate;
+    }
+
+    private long toPayOsAmount(BigDecimal value) {
+        try {
+            return normalizedMoney(value).setScale(0, RoundingMode.UNNECESSARY).longValueExact();
+        } catch (ArithmeticException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Số tiền payOS phải là số nguyên hợp lệ");
+        }
+    }
+
+    private String buildReservationPayOsDescription(Integer reservationId) {
+        if (reservationId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã đặt bàn không hợp lệ");
+        }
+        String raw = "DB" + reservationId;
+        if (raw.length() <= 9) {
+            return raw;
+        }
+        String digits = String.valueOf(reservationId);
+        return "B" + digits.substring(Math.max(0, digits.length() - 8));
     }
 
     private String normalizeDepositTransactionCode(String value) {
@@ -1724,30 +1844,6 @@ public class ReservationService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã giao dịch cọc phải từ 4 đến 100 ký tự");
         }
         return code;
-    }
-
-    private String requireVietQrConfig(String value, String environmentVariable) {
-        String normalized = trimToNull(value);
-        if (normalized == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "Chưa cấu hình VietQR. Vui lòng khai báo biến " + environmentVariable
-            );
-        }
-        return normalized;
-    }
-
-    private void validateSafeVietQrPathPart(String value, String fieldName) {
-        if (!SAFE_VIETQR_PATH_PART.matcher(value).matches()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, fieldName + " chứa ký tự không hợp lệ");
-        }
-    }
-
-    private String removeVietnameseAccents(String value) {
-        String normalized = Normalizer.normalize(value, Normalizer.Form.NFD);
-        return normalized.replaceAll("\\p{M}", "")
-                .replace('đ', 'd')
-                .replace('Đ', 'D');
     }
 
     private BigDecimal normalizedMoney(BigDecimal value) {
