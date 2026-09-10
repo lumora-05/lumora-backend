@@ -485,6 +485,204 @@ public class TableArrangementService {
     }
 
     /**
+     * Tách một bàn cụ thể khỏi nhóm đang ghép. Khác với unmerge(groupId), thao tác này
+     * được phép khi nhóm đang phục vụ và giữ nguyên đơn/món của từng bàn. Đơn của bàn
+     * được tách trở về thanh toán độc lập; các đơn còn lại tiếp tục dùng bill chung.
+     *
+     * Nếu nhóm chỉ có hai bàn, sau khi tách một bàn thì bàn còn lại cũng trở về độc lập
+     * vì nhóm một bàn không còn ý nghĩa. Nếu tách bàn chính khỏi nhóm có từ ba bàn trở
+     * lên, hệ thống tự chọn bàn còn lại có mã nhỏ nhất làm bàn chính mới.
+     */
+    @Transactional
+    public TableArrangementResponse unmergeTable(String groupId,
+                                                  Integer tableId,
+                                                  String username,
+                                                  boolean admin) {
+        String normalizedGroupId = normalizeRequired(groupId, "Mã nhóm bàn không được để trống");
+        if (tableId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã bàn cần tách không được để trống");
+        }
+
+        List<DiningTable> groupTables = new ArrayList<>(
+                diningTableRepository.findByMaNhomBanForUpdate(normalizedGroupId)
+        );
+        if (groupTables.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy nhóm bàn: " + normalizedGroupId);
+        }
+        if (groupTables.size() < 2) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Nhóm bàn không còn đủ bàn để thực hiện tách");
+        }
+
+        ensureActorCanAccessTables(username, admin, groupTables);
+
+        DiningTable detachedTable = groupTables.stream()
+                .filter(table -> tableId.equals(table.getMaBan()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Bàn cần tách không thuộc nhóm hiện tại"
+                ));
+
+        Integer currentPrimaryId = groupTables.get(0).getMaBanChinh();
+        if (currentPrimaryId == null || groupTables.stream().anyMatch(table ->
+                !normalizedGroupId.equals(table.getMaNhomBan())
+                        || table.getMaBanChinh() == null
+                        || !currentPrimaryId.equals(table.getMaBanChinh()))) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Dữ liệu nhóm bàn không nhất quán. Vui lòng tải lại và thử lại"
+            );
+        }
+        if (groupTables.stream()
+                .map(DiningTable::getTrangThai)
+                .map(this::normalize)
+                .anyMatch("DANG_THANH_TOAN"::equals)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Nhóm bàn đang chờ thanh toán nên không thể tách. Vui lòng hủy yêu cầu thanh toán trước"
+            );
+        }
+
+        Map<Integer, Order> openOrderByTable = new LinkedHashMap<>();
+        for (DiningTable table : groupTables) {
+            List<Order> orders = openOrdersForUpdate(table.getMaBan());
+            if (orders.size() > 1) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        table.getTenBan() + " đang có nhiều đơn mở. Vui lòng xử lý dữ liệu trùng trước khi tách bàn"
+                );
+            }
+            if (!orders.isEmpty()) {
+                Order order = orders.get(0);
+                if (PAYMENT_PENDING_STATUSES.contains(normalize(order.getTrangThai()))) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Nhóm bàn đang chờ thanh toán nên không thể tách. Vui lòng hủy yêu cầu thanh toán trước"
+                    );
+                }
+                if (StringUtils.hasText(order.getMaNhomThanhToan())
+                        && !normalizedGroupId.equals(order.getMaNhomThanhToan())) {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Dữ liệu nhóm thanh toán không nhất quán. Vui lòng tải lại và thử lại"
+                    );
+                }
+                openOrderByTable.put(table.getMaBan(), order);
+            }
+        }
+
+        // Nhóm chưa phục vụ vẫn dùng các ràng buộc đặt bàn cũ. Khi khách đang ăn,
+        // tách bàn chỉ thay đổi cách thanh toán nên không chặn bởi lịch đã check-in.
+        if (openOrderByTable.isEmpty()) {
+            reservationService.ensureTableGroupCanBeUnmerged(groupTables);
+        }
+
+        List<DiningTable> remainingTables = groupTables.stream()
+                .filter(table -> !tableId.equals(table.getMaBan()))
+                .sorted(Comparator.comparing(DiningTable::getMaBan))
+                .toList();
+        Order detachedOrder = openOrderByTable.get(detachedTable.getMaBan());
+
+        // Bàn tách ra luôn trở thành một phiên độc lập. Đơn gốc/món không bị di chuyển.
+        detachedTable.setMaNhomBan(null);
+        detachedTable.setMaBanChinh(null);
+        detachedTable.setTrangThai(detachedOrder == null ? "TRONG" : "DANG_SU_DUNG");
+        if (detachedOrder != null) {
+            detachedOrder.setMaNhomThanhToan(null);
+        }
+
+        DiningTable remainingPrimary = null;
+        String remainingGroupId = null;
+        if (remainingTables.size() == 1) {
+            // Hai bàn tách nhau => cả hai cùng trở về độc lập.
+            DiningTable lastTable = remainingTables.get(0);
+            Order lastOrder = openOrderByTable.get(lastTable.getMaBan());
+            lastTable.setMaNhomBan(null);
+            lastTable.setMaBanChinh(null);
+            lastTable.setTrangThai(lastOrder == null ? "TRONG" : "DANG_SU_DUNG");
+            if (lastOrder != null) {
+                lastOrder.setMaNhomThanhToan(null);
+            }
+        } else {
+            remainingGroupId = normalizedGroupId;
+            remainingPrimary = remainingTables.stream()
+                    .filter(table -> currentPrimaryId.equals(table.getMaBan()))
+                    .findFirst()
+                    .orElse(remainingTables.get(0));
+
+            Integer newPrimaryId = remainingPrimary.getMaBan();
+            boolean remainingHasOpenOrder = remainingTables.stream()
+                    .anyMatch(table -> openOrderByTable.containsKey(table.getMaBan()));
+            String remainingStatus = remainingHasOpenOrder ? "DANG_SU_DUNG" : "TRONG";
+
+            for (DiningTable table : remainingTables) {
+                table.setMaNhomBan(normalizedGroupId);
+                table.setMaBanChinh(newPrimaryId);
+                table.setTrangThai(remainingStatus);
+                Order order = openOrderByTable.get(table.getMaBan());
+                if (order != null) {
+                    order.setMaNhomThanhToan(normalizedGroupId);
+                }
+            }
+        }
+
+        diningTableRepository.saveAllAndFlush(groupTables);
+        if (!openOrderByTable.isEmpty()) {
+            orderRepository.saveAllAndFlush(openOrderByTable.values());
+        }
+
+        List<Integer> releasedTableIds = groupTables.stream()
+                .filter(table -> "TRONG".equals(normalize(table.getTrangThai())))
+                .map(DiningTable::getMaBan)
+                .toList();
+        if (!releasedTableIds.isEmpty()) {
+            serviceRequestService.cancelOpenRequestsForTables(
+                    releasedTableIds,
+                    "Bàn đã được tách khỏi nhóm và không còn đơn phục vụ"
+            );
+        }
+
+        String remainingNames = remainingTables.stream()
+                .map(DiningTable::getTenBan)
+                .toList()
+                .toString();
+        String message = remainingGroupId == null
+                ? "Đã tách " + detachedTable.getTenBan() + "; nhóm bàn đã được giải thể"
+                : "Đã tách " + detachedTable.getTenBan() + " khỏi nhóm " + remainingNames
+                        + " để thanh toán riêng";
+        systemActivityService.record(
+                "TABLE_REMOVED_FROM_GROUP",
+                message,
+                detachedOrder == null ? detachedTable.getMaBan() : detachedOrder.getMaDonHang()
+        );
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("maNhomBanCu", normalizedGroupId);
+        payload.put("maNhomBan", remainingGroupId);
+        payload.put("maBanTach", detachedTable.getMaBan());
+        payload.put("tenBanTach", detachedTable.getTenBan());
+        payload.put("maDonHangTach", detachedOrder == null ? null : detachedOrder.getMaDonHang());
+        payload.put("maBanChinh", remainingPrimary == null ? null : remainingPrimary.getMaBan());
+        payload.put("maCacBanConLai", remainingTables.stream().map(DiningTable::getMaBan).toList());
+        payload.put("thanhToanRieng", detachedOrder != null);
+        realtimeNotificationService.notifyTableArrangementChanged(
+                "TABLES_UNMERGED",
+                message,
+                payload,
+                groupTables.stream().map(DiningTable::getMaBan).toList()
+        );
+        realtimeNotificationService.notifyDashboardRefresh(payload);
+
+        return new TableArrangementResponse(
+                "TACH_BAN",
+                remainingGroupId,
+                remainingPrimary,
+                groupTables,
+                detachedOrder
+        );
+    }
+
+    /**
      * Chọn bàn thực tế để tạo/gọi thêm món. Nếu bàn phụ đã có đơn riêng từ trước
      * khi ghép thì tiếp tục gọi món vào đơn đó; bàn phụ trống vẫn dùng đơn bàn chính.
      */

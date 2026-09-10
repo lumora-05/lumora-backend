@@ -49,7 +49,12 @@ Response giữ cấu trúc cũ. Payload realtime có thêm:
 ## Chuyển / tách bàn
 
 - Chuyển bàn chỉ thực hiện giữa hai bàn độc lập; nếu bàn đang thuộc nhóm ghép thì phải tách/xử lý nhóm trước.
-- Không cho tách thủ công khi nhóm vẫn còn đơn đang mở.
+- Có thể tách **một bàn cụ thể** khỏi nhóm ngay cả khi nhóm đang phục vụ. Đơn và món của bàn đó được giữ nguyên, chỉ bỏ khỏi `ma_nhom_thanh_toan` để thanh toán riêng.
+- Không cho tách khi bất kỳ đơn nào trong nhóm đã vào `CHO_THANH_TOAN` / `SAN_SANG_THANH_TOAN`; phải hủy yêu cầu thanh toán trước.
+- Nếu tách bàn chính khỏi nhóm còn từ hai bàn trở lên, backend tự chọn bàn còn lại có mã nhỏ nhất làm bàn chính mới.
+- Nếu nhóm chỉ có hai bàn, tách một bàn sẽ giải thể nhóm; cả hai bàn trở về độc lập và giữ nguyên đơn của mình.
+- Endpoint mới: `DELETE /api/tables/groups/{groupId}/tables/{tableId}`.
+- Endpoint cũ `DELETE /api/tables/groups/{groupId}` vẫn giữ nguyên để giải thể toàn bộ nhóm khi chưa có/không còn đơn mở, bảo đảm tương thích frontend cũ.
 - Một đơn kết thúc/hủy trước không tự làm tách cả nhóm nếu còn đơn khác đang mở.
 - Khi đơn cuối cùng/bill chung kết thúc, toàn bộ nhóm tự giải phóng.
 

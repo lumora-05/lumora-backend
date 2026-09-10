@@ -121,6 +121,25 @@ public class TableController {
         return ResponseEntity.ok(ApiResponse.success("Tách bàn thành công", result));
     }
 
+    /**
+     * Tách một bàn cụ thể khỏi nhóm, kể cả khi các bàn đang có đơn phục vụ.
+     * Đơn/món của bàn được giữ nguyên và chuyển về thanh toán riêng.
+     */
+    @DeleteMapping("/groups/{groupId}/tables/{tableId}")
+    @PreAuthorize("hasAnyRole('ADMIN','WAITER')")
+    public ResponseEntity<ApiResponse<TableArrangementResponse>> unmergeTable(
+            @PathVariable String groupId,
+            @PathVariable Integer tableId,
+            Authentication authentication) {
+        TableArrangementResponse result = tableArrangementService.unmergeTable(
+                groupId,
+                tableId,
+                authentication.getName(),
+                hasRole(authentication, "ROLE_ADMIN")
+        );
+        return ResponseEntity.ok(ApiResponse.success("Tách bàn thành công", result));
+    }
+
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Integer id) {
