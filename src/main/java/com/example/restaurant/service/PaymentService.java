@@ -10,6 +10,7 @@ import com.example.restaurant.dto.RevenueResponse;
 import com.example.restaurant.dto.VietQrResponse;
 import com.example.restaurant.entity.DiningTable;
 import com.example.restaurant.entity.Employee;
+import com.example.restaurant.entity.Food;
 import com.example.restaurant.entity.Invoice;
 import com.example.restaurant.entity.Order;
 import com.example.restaurant.entity.OrderItem;
@@ -1176,13 +1177,17 @@ public class PaymentService {
                 : BigDecimal.ZERO;
         int quantity = item.getSoLuong() != null ? item.getSoLuong() : 0;
         BigDecimal lineTotal = unitPrice.multiply(BigDecimal.valueOf(quantity));
-        String foodName = item.getMonAn() != null
-                ? item.getMonAn().getTenMonAn()
+        Food food = item.getMonAn();
+        String foodName = food != null
+                ? food.getTenMonAn()
                 : "Món ăn";
 
         return new PaymentSlipItemResponse(
                 item.getMaChiTiet(),
+                food != null ? food.getMaMonAn() : null,
                 foodName,
+                food != null ? food.getMoTa() : null,
+                food != null ? food.getHinhAnh() : null,
                 quantity,
                 unitPrice,
                 lineTotal,
