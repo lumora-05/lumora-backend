@@ -2425,9 +2425,11 @@ public class OrderService {
         DiningTable selectedTable = diningTableRepository.findByQrToken(qrToken)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Mã QR không hợp lệ"));
         validateCustomerQrCanOrder(selectedTable);
-        // Sau khi ghép bàn, QR của bất kỳ bàn nào trong nhóm đều gọi thêm vào
-        // đơn của bàn chính. Các đơn cũ trước khi ghép vẫn được giữ để truy vết.
-        return tableArrangementService.resolveSharedQrOrderTableForUpdate(selectedTable);
+        // Sau khi ghép bàn, mỗi QR vẫn tạo/gọi thêm món vào đúng bàn vật lý
+        // mà khách đã quét. Các đơn của những bàn trong nhóm được liên kết bằng
+        // maNhomThanhToan để cùng theo dõi và thanh toán chung, nhưng không bị
+        // dồn hết về đơn của bàn chính.
+        return tableArrangementService.resolveQrOrderTableForUpdate(selectedTable);
     }
 
     private void ensureCustomerQrOwnsOrder(String qrToken, Order order) {

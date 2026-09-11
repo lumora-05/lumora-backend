@@ -337,8 +337,8 @@ public class TableArrangementService {
         }
 
         // Bàn mới chưa có đơn phải thực sự trống và không vướng đặt bàn. Các bàn
-        // đã nằm trong nhóm có thể không có đơn riêng vì QR của bàn phụ dùng chung
-        // phiên phục vụ với bàn chính, nên không áp điều kiện TRONG cho chúng.
+        // đã nằm trong nhóm có thể chưa có đơn riêng nếu khách chưa gọi món từ QR
+        // của bàn đó, nên không áp điều kiện TRONG lại cho các bàn đã thuộc nhóm.
         for (DiningTable table : newTables) {
             List<Order> orders = ordersByTable.getOrDefault(table.getMaBan(), List.of());
             if (orders.isEmpty()) {
@@ -729,41 +729,47 @@ public class TableArrangementService {
     }
 
     /**
-     * Phiên QR sau khi ghép dùng bàn chính làm nơi nhận các lượt gọi món mới.
-     * Các đơn đã tồn tại trước lúc ghép vẫn được giữ nguyên để bảo toàn lịch sử;
-     * chỉ những lượt gọi thêm từ QR sau khi ghép mới quy về đơn của bàn chính.
+     * Sau khi ghép bàn, mỗi QR vẫn nhận món cho đúng bàn vật lý được quét.
+     * Nhóm bàn chỉ dùng để chia sẻ phiên theo dõi và liên kết các đơn bằng
+     * maNhomThanhToan để thanh toán chung; không dồn món mới về bàn chính.
      */
     @Transactional
-    public DiningTable resolveSharedQrOrderTableForUpdate(DiningTable scannedTable) {
+    public DiningTable resolveQrOrderTableForUpdate(DiningTable scannedTable) {
         if (scannedTable == null || scannedTable.getMaBan() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Không xác định được bàn ăn");
         }
 
-        // Chỉ khóa bàn thực sự nhận lượt gọi món. Với nhóm ghép, mọi QR cùng khóa
-        // bàn chính nên hai request đồng thời không tạo hai đơn mới và cũng tránh
-        // khóa chéo bàn phụ -> bàn chính gây deadlock.
-        if (!StringUtils.hasText(scannedTable.getMaNhomBan())) {
-            return diningTableRepository.findByIdForUpdate(scannedTable.getMaBan())
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.NOT_FOUND,
-                            "Không tìm thấy bàn ăn: " + scannedTable.getMaBan()
-                    ));
+        // Khóa chính bàn được quét để hai lượt gọi đồng thời từ cùng QR không thể
+        // tạo hai đơn mở cho cùng một bàn. Các QR khác trong nhóm khóa bàn của
+        // chính chúng nên mỗi bàn vẫn giữ được đơn và nguồn gọi món riêng.
+        DiningTable lockedScannedTable = diningTableRepository.findByIdForUpdate(scannedTable.getMaBan())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Không tìm thấy bàn ăn: " + scannedTable.getMaBan()
+                ));
+
+        if (!StringUtils.hasText(lockedScannedTable.getMaNhomBan())) {
+            return lockedScannedTable;
         }
 
-        Integer primaryId = scannedTable.getMaBanChinh();
+        Integer primaryId = lockedScannedTable.getMaBanChinh();
         if (primaryId == null) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Nhóm bàn chưa xác định được bàn chính"
             );
         }
-        DiningTable primary = diningTableRepository.findByIdForUpdate(primaryId)
+
+        // Không cần khóa bàn chính vì lượt gọi món này không ghi vào đơn của bàn
+        // chính. Chỉ kiểm tra cấu trúc nhóm còn hợp lệ để tránh tạo đơn trong một
+        // nhóm vừa bị thay đổi ở request khác.
+        DiningTable primary = diningTableRepository.findById(primaryId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.CONFLICT,
                         "Nhóm bàn không còn bàn chính hợp lệ"
                 ));
         if (!StringUtils.hasText(primary.getMaNhomBan())
-                || !scannedTable.getMaNhomBan().equals(primary.getMaNhomBan())
+                || !lockedScannedTable.getMaNhomBan().equals(primary.getMaNhomBan())
                 || primary.getMaBanChinh() == null
                 || !primaryId.equals(primary.getMaBanChinh())) {
             throw new ResponseStatusException(
@@ -771,7 +777,7 @@ public class TableArrangementService {
                     "Nhóm bàn vừa thay đổi. Vui lòng tải lại mã QR và thử lại"
             );
         }
-        return primary;
+        return lockedScannedTable;
     }
 
     /**
