@@ -15,6 +15,7 @@ public record KitchenActiveOrderResponse(
         LocalDateTime thoiGianDat,
         String ghiChu,
         String loaiDon,
+        String maNhomThanhToan,
         DeliverySummary giaoHang,
         List<ItemSummary> chiTietDonHang
 ) {

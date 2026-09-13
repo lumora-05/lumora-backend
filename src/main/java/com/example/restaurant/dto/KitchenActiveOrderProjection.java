@@ -21,6 +21,8 @@ public interface KitchenActiveOrderProjection {
 
     String getLoaiDon();
 
+    String getMaNhomThanhToan();
+
     String getPhuongThucNhanHang();
 
     Integer getMaChiTiet();

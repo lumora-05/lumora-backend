@@ -117,6 +117,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
                                o.thoiGianDat as thoiGianDat,
                                o.ghiChu as ghiChuDon,
                                o.loaiDon as loaiDon,
+                               o.maNhomThanhToan as maNhomThanhToan,
                                d.phuongThucNhanHang as phuongThucNhanHang,
                                i.maChiTiet as maChiTiet,
                                i.soLuong as soLuong,

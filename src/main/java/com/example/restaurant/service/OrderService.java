@@ -526,6 +526,7 @@ public class OrderService {
                             first.getThoiGianDat(),
                             first.getGhiChuDon(),
                             first.getLoaiDon(),
+                            first.getMaNhomThanhToan(),
                             delivery,
                             items
                     );
