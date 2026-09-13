@@ -154,17 +154,38 @@ public class ReservationService {
 
         TableReservation reservation = findByCodeForUpdate(code);
         verifyCustomerPhone(reservation, phone);
-        if (!PENDING.equals(normalizeStatus(reservation.getTrangThai()))) {
+
+        String reservationStatus = normalizeStatus(reservation.getTrangThai());
+        String depositStatus = normalizeStatus(reservation.getTrangThaiCoc());
+        boolean expiredByDepositTimeout = EXPIRED.equals(reservationStatus)
+                && DEPOSIT_CANCELLED.equals(depositStatus)
+                && "Quá thời hạn thanh toán tiền cọc".equals(reservation.getLyDoHuyTuChoi());
+
+        if (!PENDING.equals(reservationStatus) && !expiredByDepositTimeout) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn không còn ở bước thanh toán cọc");
         }
-        if (!DEPOSIT_PENDING.equals(normalizeStatus(reservation.getTrangThaiCoc()))) {
+        if (PENDING.equals(reservationStatus) && !DEPOSIT_PENDING.equals(depositStatus)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Tiền cọc của lịch đặt bàn đã được xử lý");
         }
 
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime depositDeadline = reservation.getThoiHanThanhToanCoc();
-        if (depositDeadline != null && !now.isBefore(depositDeadline)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đã quá thời hạn thanh toán tiền cọc");
+        boolean depositDeadlineExpired = depositDeadline != null && !now.isBefore(depositDeadline);
+        if ((expiredByDepositTimeout || depositDeadlineExpired)
+                && now.isAfter(reservation.getNgayGioDen().plusMinutes(noShowGraceMinutes()))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Lịch đặt bàn đã quá thời gian có thể tiếp nhận");
+        }
+
+        if (expiredByDepositTimeout || depositDeadlineExpired) {
+            // QR cũ đã hết hạn: cho khách chủ động tạo lại một phiên thanh toán mới.
+            // Chỉ mở lại lịch bị đóng do chính thời hạn cọc, không mở lại lịch hủy/từ chối khác.
+            reservation.setTrangThai(PENDING);
+            reservation.setTrangThaiCoc(DEPOSIT_PENDING);
+            reservation.setLyDoHuyTuChoi(null);
+            reservation.setLyDoXuLyCoc("Khách đã tạo lại mã thanh toán tiền cọc");
+            depositDeadline = now.plusMinutes(depositPaymentTimeoutMinutes());
+            reservation.setThoiHanThanhToanCoc(depositDeadline);
+            reservationRepository.saveAndFlush(reservation);
         }
 
         BigDecimal payable = normalizedMoney(reservation.getTienCoc());
