@@ -1012,7 +1012,8 @@ public class PaymentService {
                 amount,
                 addInfo,
                 template,
-                qrUrl
+                qrUrl,
+                null
         );
     }
 
@@ -1156,7 +1157,8 @@ public class PaymentService {
                 normalizedMoney(payment.getSoTien()).setScale(0, RoundingMode.UNNECESSARY),
                 payment.getNoiDungChuyenKhoan(),
                 "payos",
-                qrCodeDataUrl(qrCode)
+                qrCodeDataUrl(qrCode),
+                payment.getHetHanLuc()
         );
     }
 
