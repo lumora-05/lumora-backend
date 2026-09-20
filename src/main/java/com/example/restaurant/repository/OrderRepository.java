@@ -65,6 +65,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer>, JpaSpeci
                                o.thoiGianYeuCauThanhToan as thoiGianYeuCauThanhToan,
                                o.tongTien as tongTien,
                                o.maNhomThanhToan as maNhomThanhToan,
+                               o.sessionId as sessionId,
                                i.maChiTiet as maChiTiet,
                                i.soLuong as soLuong,
                                i.trangThaiMon as trangThaiMon,

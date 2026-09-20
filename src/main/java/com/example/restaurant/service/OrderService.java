@@ -329,6 +329,9 @@ public class OrderService {
                             first.getThoiGianYeuCauThanhToan(),
                             first.getTongTien(),
                             first.getMaNhomThanhToan(),
+                            StringUtils.hasText(first.getSessionId())
+                                    ? first.getSessionId()
+                                    : "LEGACY-" + first.getMaDonHang(),
                             items
                     );
                 })
