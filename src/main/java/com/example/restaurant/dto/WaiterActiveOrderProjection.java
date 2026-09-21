@@ -28,8 +28,6 @@ public interface WaiterActiveOrderProjection {
 
     String getMaNhomThanhToan();
 
-    String getSessionId();
-
     Integer getMaChiTiet();
 
     Integer getSoLuong();

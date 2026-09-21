@@ -19,7 +19,6 @@ public record WaiterActiveOrderResponse(
         LocalDateTime thoiGianYeuCauThanhToan,
         BigDecimal tongTien,
         String maNhomThanhToan,
-        String sessionId,
         List<ItemSummary> chiTietDonHang
 ) {
     public record TableSummary(

@@ -10,7 +10,6 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 
 @Getter
 @Setter
@@ -26,14 +25,6 @@ public class Order {
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "ma_ban")
     private DiningTable banAn;
-
-    /**
-     * ID phiên sử dụng bàn. Mỗi lượt khách/đơn tại bàn có một sessionId riêng;
-     * các lần gọi thêm món vào cùng đơn giữ nguyên sessionId này.
-     * QR và mã bàn vẫn có thể cố định, còn sessionId thay đổi khi có lượt khách mới.
-     */
-    @Column(name = "session_id", length = 64, unique = true)
-    private String sessionId;
 
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "ma_nhan_vien")
@@ -122,14 +113,12 @@ public class Order {
         if (thoiGianDat == null) {
             thoiGianDat = now;
         }
-        ensureTableSessionId();
         thoiGianCapNhat = now;
         initializeMoneyDefaults();
     }
 
     @PreUpdate
     public void preUpdate() {
-        ensureTableSessionId();
         thoiGianCapNhat = LocalDateTime.now();
         initializeMoneyDefaults();
     }
@@ -160,28 +149,6 @@ public class Order {
     @Transient
     public String getMaCodeKhuyenMai() {
         return khuyenMai == null ? null : khuyenMai.getMaCode();
-    }
-
-    /**
-     * Dữ liệu cũ chưa có cột session_id vẫn nhận một ID ổn định theo mã đơn.
-     * Khi bản ghi cũ được cập nhật, cùng ID này sẽ được lưu xuống database.
-     */
-    public String getSessionId() {
-        if (sessionId != null && !sessionId.isBlank()) {
-            return sessionId;
-        }
-        if (banAn != null && maDonHang != null) {
-            return "LEGACY-" + maDonHang;
-        }
-        return null;
-    }
-
-    private void ensureTableSessionId() {
-        if (banAn != null && (sessionId == null || sessionId.isBlank())) {
-            sessionId = maDonHang == null
-                    ? UUID.randomUUID().toString()
-                    : "LEGACY-" + maDonHang;
-        }
     }
 
     private void initializeMoneyDefaults() {
