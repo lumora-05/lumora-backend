@@ -16,10 +16,10 @@ import java.time.LocalDateTime;
 @Entity
 @Table(
         name = "khach_hang",
-        uniqueConstraints = @UniqueConstraint(
+        uniqueConstraints = {@UniqueConstraint(
                 name = "uk_khach_hang_so_dien_thoai",
                 columnNames = "so_dien_thoai"
-        )
+        ), @UniqueConstraint(name = "uk_khach_hang_google_subject", columnNames = "google_subject")}
 )
 public class Customer {
     @Id
@@ -30,8 +30,17 @@ public class Customer {
     @Column(name = "ho_ten", length = 100, nullable = false)
     private String hoTen;
 
-    @Column(name = "so_dien_thoai", length = 15, nullable = false)
+    @Column(name = "so_dien_thoai", length = 15)
     private String soDienThoai;
+
+    /** Định danh Google ổn định; không liên kết tài khoản chỉ bằng email/SĐT. */
+    @JsonIgnore
+    @Column(name = "google_subject", length = 255)
+    private String googleSubject;
+
+    @JsonIgnore
+    @Column(name = "google_email", length = 320)
+    private String googleEmail;
 
     /** Null với khách vãng lai/khách thân thiết chưa tạo tài khoản. */
     @JsonIgnore

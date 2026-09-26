@@ -40,7 +40,7 @@ public class JwtService {
         claims.put("customerId", customerId);
         return Jwts.builder()
                 .claims(claims)
-                .subject(phone)
+                .subject(phone != null && !phone.isBlank() ? phone : "customer:" + customerId)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expirationMs))
                 .signWith(getSignInKey())

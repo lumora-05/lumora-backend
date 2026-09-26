@@ -428,7 +428,8 @@ public class LoyaltyService {
     }
 
     private LoyaltyCustomerResponse toCustomerResponse(Customer customer) {
-        boolean hasAccount = customer.getMatKhauHash() != null && !customer.getMatKhauHash().isBlank();
+        boolean hasAccount = (customer.getMatKhauHash() != null && !customer.getMatKhauHash().isBlank())
+                || (customer.getGoogleSubject() != null && !customer.getGoogleSubject().isBlank());
         return new LoyaltyCustomerResponse(
                 customer.getMaKhachHang(),
                 customer.getHoTen(),

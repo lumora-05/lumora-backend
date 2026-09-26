@@ -104,11 +104,11 @@ public class AuthService {
         GoogleIdToken.Payload payload = googleTokenService.verify(request.credential());
         String email = payload.getEmail().trim();
 
-        Employee employee = employeeRepository.findByEmailIgnoreCase(email)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.FORBIDDEN,
-                        "Email Google chưa được cấp quyền sử dụng hệ thống"
-                ));
+        // Giữ ưu tiên và quyền truy cập nhân viên như trước, kể cả tài khoản bị khóa.
+        Employee employee = employeeRepository.findByEmailIgnoreCase(email).orElse(null);
+        if (employee == null) {
+            return createCustomerAuthResponse(customerAccountService.loginWithGoogle(payload));
+        }
 
         if (!ACTIVE_STATUS.equalsIgnoreCase(employee.getTrangThai())) {
             throw new ResponseStatusException(
@@ -140,7 +140,7 @@ public class AuthService {
     private AuthResponse createCustomerAuthResponse(CustomerAuthResponse customer) {
         return new AuthResponse(
                 customer.token(),
-                customer.soDienThoai(),
+                customer.soDienThoai() != null ? customer.soDienThoai() : "customer:" + customer.maKhachHang(),
                 CUSTOMER_ROLE,
                 customer.hoTen(),
                 null,

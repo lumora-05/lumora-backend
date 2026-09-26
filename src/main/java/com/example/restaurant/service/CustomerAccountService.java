@@ -7,6 +7,7 @@ import com.example.restaurant.dto.CustomerRegisterRequest;
 import com.example.restaurant.dto.CustomerProfileUpdateRequest;
 import com.example.restaurant.entity.Customer;
 import com.example.restaurant.repository.CustomerRepository;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -38,7 +39,8 @@ public class CustomerAccountService {
         String phone = normalizePhone(request.soDienThoai());
         Customer customer = customerRepository.findBySoDienThoaiForUpdate(phone).orElse(null);
 
-        if (customer != null && StringUtils.hasText(customer.getMatKhauHash())) {
+        if (customer != null && (StringUtils.hasText(customer.getMatKhauHash())
+                || StringUtils.hasText(customer.getGoogleSubject()))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Số điện thoại đã có tài khoản");
         }
         if (customer != null && !"HOAT_DONG".equalsIgnoreCase(customer.getTrangThai())) {
@@ -84,6 +86,33 @@ public class CustomerAccountService {
 
         // Cấp lại JWT để claim số điện thoại luôn đồng bộ khi khách đổi số.
         return toAuthResponse(saved);
+    }
+
+    /** Chỉ nhận payload đã được GoogleTokenService xác minh tại AuthService. */
+    @Transactional
+    public CustomerAuthResponse loginWithGoogle(GoogleIdToken.Payload payload) {
+        String subject = payload.getSubject();
+        String email = payload.getEmail();
+        if (!StringUtils.hasText(subject) || subject.length() > 255
+                || !StringUtils.hasText(email) || email.trim().length() > 320
+                || !Boolean.TRUE.equals(payload.getEmailVerified())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Thông tin tài khoản Google không hợp lệ");
+        }
+
+        Customer customer = customerRepository.findByGoogleSubjectForUpdate(subject).orElse(null);
+        if (customer == null) {
+            customer = new Customer();
+            customer.setGoogleSubject(subject);
+            Object googleName = payload.get("name");
+            String name = googleName instanceof String value && StringUtils.hasText(value)
+                    ? value.trim() : "Khách hàng Google";
+            customer.setHoTen(name.substring(0, Math.min(name.length(), 100)));
+            // Google không cung cấp SĐT. Không tạo SĐT/mật khẩu giả hoặc ghép tài khoản cũ.
+        } else if (!"HOAT_DONG".equalsIgnoreCase(customer.getTrangThai())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tài khoản khách hàng đã ngừng hoạt động");
+        }
+        customer.setGoogleEmail(email.trim().toLowerCase(Locale.ROOT));
+        return toAuthResponse(customerRepository.saveAndFlush(customer));
     }
 
     @Transactional(readOnly = true)

@@ -13,6 +13,10 @@ import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 
 public interface CustomerRepository extends JpaRepository<Customer, Integer>, JpaSpecificationExecutor<Customer> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select c from Customer c where c.googleSubject = :subject")
+    Optional<Customer> findByGoogleSubjectForUpdate(@Param("subject") String subject);
+
     Optional<Customer> findBySoDienThoai(String soDienThoai);
 
     boolean existsBySoDienThoai(String soDienThoai);

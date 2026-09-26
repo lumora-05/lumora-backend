@@ -27,6 +27,9 @@ public class DataInitializer {
                                OrderItemUnitUpgradeService orderItemUnitUpgradeService,
                                JdbcTemplate jdbcTemplate) {
         return args -> {
+            // Khách đăng nhập Google có thể bổ sung SĐT sau; Hibernate update không
+            // luôn gỡ NOT NULL trên cột đã tồn tại. Không thay đổi dữ liệu khách cũ.
+            jdbcTemplate.execute("ALTER TABLE IF EXISTS khach_hang ALTER COLUMN so_dien_thoai DROP NOT NULL");
             // Tương thích DB đã tạo trước khi đơn online dùng payOS: khách tự mở QR nên
             // giao dịch không có nhân viên khởi tạo. Câu lệnh idempotent, chạy lại an toàn.
             jdbcTemplate.execute("ALTER TABLE IF EXISTS giao_dich_payos ALTER COLUMN ma_nhan_vien DROP NOT NULL");
