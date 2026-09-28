@@ -557,6 +557,20 @@ public class PaymentService {
         Employee employee = requireCashierOrAdmin(username);
 
         List<PaymentPart> existingParts = paymentPartsFor(order);
+        // Với luồng thanh toán kết hợp hiện tại, một bill chỉ có một phần chuyển khoản payOS.
+        // Nếu webhook đã ghi nhận phần chuyển khoản thành công thì mọi yêu cầu tạo QR đến muộn
+        // (ví dụ request frontend cũ còn đang chạy) không được tạo thêm payment PENDING mới.
+        if (paidByMethod(existingParts, METHOD_BANK_TRANSFER).signum() > 0) {
+            cancelPendingPayOsPaymentsForOrder(
+                    order.getMaDonHang(),
+                    null,
+                    "Phần chuyển khoản của hóa đơn đã được thanh toán"
+            );
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Phần chuyển khoản của hóa đơn đã được ghi nhận. Vui lòng thu số tiền còn lại bằng tiền mặt"
+            );
+        }
         PaymentContext context = resolvePaymentContext(existingParts, phone, null, pointsToUse);
         LoyaltyPreviewResponse preview = loyaltyService.preview(context.phone(), context.points(), billing.total());
         BigDecimal payable = externalPayableAmount(billing, preview.tongThanhToan());
@@ -715,6 +729,15 @@ public class PaymentService {
         payment.setMaThamChieu(reference);
         payment.setThoiGianThanhToan(LocalDateTime.now());
         payOsPaymentRepository.saveAndFlush(payment);
+
+        // Đóng mọi QR cũ/đúp còn PENDING của cùng bill. Nếu không, sau khi webhook đã
+        // ghi nhận chuyển khoản thành công, phần tiền mặt còn lại có thể bị chặn nhầm vì
+        // backend vẫn cộng một payment attempt PENDING vào số tiền đang chờ.
+        cancelPendingPayOsPaymentsForOrder(
+                payment.getDonHang().getMaDonHang(),
+                payment.getMaGiaoDichPayOs(),
+                "Phần chuyển khoản của hóa đơn đã được thanh toán bằng yêu cầu khác"
+        );
 
         MixedPaymentStatusResponse mixedStatus = recordPayOsPaymentPart(payment, reference);
         if (mixedStatus.hoanTat()) {
@@ -1466,6 +1489,18 @@ public class PaymentService {
     }
 
     private BigDecimal activePendingPayOsAmount(Integer anchorOrderId) {
+        // Khi một phần chuyển khoản đã được webhook ghi nhận vào khoan_thanh_toan,
+        // mọi QR PENDING còn lại của cùng bill chỉ có thể là attempt cũ/đúp.
+        // Dọn chúng trước khi kiểm tra phần tiền mặt để không cộng trùng số tiền.
+        if (hasRecordedBankTransfer(anchorOrderId)) {
+            cancelPendingPayOsPaymentsForOrder(
+                    anchorOrderId,
+                    null,
+                    "Phần chuyển khoản của hóa đơn đã được thanh toán"
+            );
+            return BigDecimal.ZERO.setScale(2);
+        }
+
         LocalDateTime now = LocalDateTime.now();
         BigDecimal total = BigDecimal.ZERO.setScale(2);
         for (PayOsPayment pending : payOsPaymentRepository
@@ -1481,6 +1516,13 @@ public class PaymentService {
     }
 
     private BigDecimal pendingPayOsAmountReadOnly(Integer anchorOrderId) {
+        // Trạng thái đọc cũng không được hiển thị QR PENDING cũ sau khi chuyển khoản
+        // thực tế đã được ghi nhận thành công. Việc dọn trạng thái DB sẽ diễn ra ở
+        // webhook hoặc lần ghi nhận tiền mặt kế tiếp.
+        if (hasRecordedBankTransfer(anchorOrderId)) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+
         LocalDateTime now = LocalDateTime.now();
         return payOsPaymentRepository
                 .findByDonHang_MaDonHangAndTrangThaiOrderByThoiGianTaoDesc(anchorOrderId, "PENDING")
@@ -1490,6 +1532,47 @@ public class PaymentService {
                 .map(this::normalizedMoney)
                 .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add)
                 .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private boolean hasRecordedBankTransfer(Integer anchorOrderId) {
+        if (anchorOrderId == null) {
+            return false;
+        }
+        return paymentPartRepository
+                .findByDonHang_MaDonHangOrderByThoiGianThanhToanAscMaKhoanThanhToanAsc(anchorOrderId)
+                .stream()
+                .anyMatch(part -> METHOD_BANK_TRANSFER.equals(normalizeText(part.getPhuongThucThanhToan()))
+                        && normalizedMoney(part.getSoTien()).signum() > 0);
+    }
+
+    /**
+     * Hủy các payment attempt payOS PENDING còn lại của một bill. Chỉ cập nhật dữ liệu
+     * cục bộ sau khi cố gắng hủy ở gateway; lỗi từ gateway không được phép chặn luồng
+     * đã thanh toán thành công hoặc việc thu phần tiền mặt còn lại.
+     */
+    private void cancelPendingPayOsPaymentsForOrder(Integer anchorOrderId,
+                                                     Long excludedPaymentId,
+                                                     String reason) {
+        if (anchorOrderId == null) {
+            return;
+        }
+        List<PayOsPayment> pendingPayments = payOsPaymentRepository
+                .findByDonHang_MaDonHangAndTrangThaiOrderByThoiGianTaoDesc(anchorOrderId, "PENDING");
+        for (PayOsPayment pending : pendingPayments) {
+            if (excludedPaymentId != null && Objects.equals(pending.getMaGiaoDichPayOs(), excludedPaymentId)) {
+                continue;
+            }
+            try {
+                payOsGatewayService.cancelPayment(
+                        pending.getPayOsOrderCode(),
+                        trimToNull(reason) == null ? "Đóng yêu cầu thanh toán cũ" : reason
+                );
+            } catch (RuntimeException ignored) {
+                // Không rollback giao dịch hợp lệ chỉ vì attempt cũ không hủy được ở payOS.
+            }
+            pending.setTrangThai("CANCELLED");
+            payOsPaymentRepository.save(pending);
+        }
     }
 
     private BigDecimal externalPayableAmount(BillingContext billing, BigDecimal finalAmount) {
