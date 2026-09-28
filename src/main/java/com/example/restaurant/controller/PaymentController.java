@@ -2,6 +2,8 @@ package com.example.restaurant.controller;
 
 import com.example.restaurant.dto.ApiResponse;
 import com.example.restaurant.dto.LoyaltyPreviewResponse;
+import com.example.restaurant.dto.MixedCashPaymentRequest;
+import com.example.restaurant.dto.MixedPaymentStatusResponse;
 import com.example.restaurant.dto.PaymentRequest;
 import com.example.restaurant.dto.PaymentSlipResponse;
 import com.example.restaurant.dto.PayOsWebhookResponse;
@@ -17,6 +19,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @RestController
@@ -63,10 +66,39 @@ public class PaymentController {
             @PathVariable Integer orderId,
             @RequestParam(required = false) String phone,
             @RequestParam(defaultValue = "0") Integer pointsToUse,
+            @RequestParam(required = false) BigDecimal amount,
             Principal principal) {
         String username = principal != null ? principal.getName() : null;
-        VietQrResponse response = paymentService.createPayOsVietQr(orderId, phone, pointsToUse, username);
+        VietQrResponse response = paymentService.createPayOsVietQr(orderId, phone, pointsToUse, amount, username);
         return ResponseEntity.ok(ApiResponse.success("Tạo VietQR payOS cho đơn hàng thành công", response));
+    }
+
+    /**
+     * Ghi nhận một phần tiền mặt của bill. Endpoint này dành cho thanh toán kết hợp;
+     * hóa đơn chỉ được chốt khi tổng tiền mặt + payOS đã đủ số phải thu.
+     */
+    @PostMapping("/mixed/cash")
+    @PreAuthorize("hasRole('CASHIER')")
+    public ResponseEntity<ApiResponse<MixedPaymentStatusResponse>> addMixedCashPayment(
+            @Valid @RequestBody MixedCashPaymentRequest request,
+            Principal principal) {
+        String username = principal != null ? principal.getName() : null;
+        MixedPaymentStatusResponse response = paymentService.addMixedCashPayment(request, username);
+        return ResponseEntity.ok(ApiResponse.success(
+                response.hoanTat() ? "Thanh toán kết hợp đã hoàn tất" : "Đã ghi nhận phần tiền mặt",
+                response
+        ));
+    }
+
+    /** Xem tiến độ thanh toán kết hợp của bill. */
+    @GetMapping("/mixed/order/{orderId}")
+    @PreAuthorize("hasAnyRole('ADMIN','CASHIER')")
+    public ResponseEntity<ApiResponse<MixedPaymentStatusResponse>> mixedPaymentStatus(
+            @PathVariable Integer orderId,
+            @RequestParam(required = false) String phone,
+            @RequestParam(defaultValue = "0") Integer pointsToUse) {
+        MixedPaymentStatusResponse response = paymentService.getMixedPaymentStatus(orderId, phone, pointsToUse);
+        return ResponseEntity.ok(ApiResponse.success("Lấy trạng thái thanh toán kết hợp thành công", response));
     }
 
     /**
